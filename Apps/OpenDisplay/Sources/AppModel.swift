@@ -329,7 +329,6 @@ final class AppModel: ObservableObject {
     private lazy var osdHUD = OSDHUDController()
     /// Active media-key event tap (Batch-3 #3) when interception is on AND Accessibility is granted.
     private var mediaKeyTap: MediaKeyTap?
-    private var mediaKeyTraceRemaining = 64
     /// Re-arms the media-key tap once the Accessibility grant lands. TCC has no notification API, so
     /// without this poll the user must relaunch the app after granting — the #1 "keys don't work" trap.
     private var mediaKeyTapRetry: Task<Void, Never>?
@@ -1388,9 +1387,11 @@ final class AppModel: ObservableObject {
             softwareDim[id] = gamma
             writeGamma(level: gamma, id: id, cgID: cgID)  // brightness emulation keeps the warmth
         }
+        if origin == .keys { mediaKeyTap?.trace("hud-begin") }
         presentOSD(kind: .brightness, value: value, for: observation,
                    source: origin == .keys ? "mediaKey" : "app",
                    showHUD: OSDPresentationPolicy.showsHUD(for: origin))
+        if origin == .keys { mediaKeyTap?.trace("hud-end") }
         syncGroupBrightness(value, from: observation, token: syncToken, origin: origin)  // Issue #39
     }
 
@@ -4818,6 +4819,7 @@ final class AppModel: ObservableObject {
     /// others (e.g. volume on the built-in) pass through to macOS.
     @discardableResult
     func handleMediaKey(_ action: MediaKeyAction, fineStep: Bool) -> Bool {
+        mediaKeyTap?.trace("route-begin action=\(action)")
         // Volume/mute follow the system's default audio output (resolved at keypress); brightness
         // follows the configured target mode and ignores this.
         let audioTarget = action.isVolume ? audioOutputDisplayID() : nil
@@ -4826,11 +4828,8 @@ final class AppModel: ObservableObject {
             for: action, in: displays, cursor: cursor,
             mode: settings.mediaKeyTargetMode, volumeCapable: volumeCapableDisplayIDs(),
             audioTarget: audioTarget)
-        if MediaKeyTap.tracing, mediaKeyTraceRemaining > 0 {
-            mediaKeyTraceRemaining -= 1
-            let line = "t=\(Date().timeIntervalSince1970) media-route action=\(action) mode=\(settings.mediaKeyTargetMode) cursor=\(String(describing: cursor)) targetCG=\(String(describing: target?.cgDisplayID))\n"
-            FileHandle.standardError.write(Data(line.utf8))
-        }
+        mediaKeyTap?.trace("route-end action=\(action) mode=\(settings.mediaKeyTargetMode) "
+                           + "cursor=\(String(describing: cursor)) targetCG=\(String(describing: target?.cgDisplayID))")
         guard let target else { return false }
         // The selected display is authoritative. Letting macOS re-route a handled key can drive
         // a different display and show its HUD there, even when the pointer targets this one.

@@ -115,18 +115,29 @@ final class MediaKeyTap {
     /// Dispatch a decoded media key to the handler; returns whether it was consumed.
     func dispatch(_ action: MediaKeyAction, fineStep: Bool, isDown: Bool = true) -> Bool {
         if !isDown { return handledPresses.remove(action) != nil }
+        trace("dispatch-begin action=\(action)")
+        let started = DispatchTime.now().uptimeNanoseconds
         let consumed = handler(action, fineStep)
+        trace("dispatch-end action=\(action) consumed=\(consumed) "
+              + "duration-ms=\(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)")
         if consumed { handledPresses.insert(action) } else { handledPresses.remove(action) }
         return consumed
     }
 
     nonisolated static let tracing = ProcessInfo.processInfo.environment["OPENDISPLAY_KEY_TRACE"] == "1"
     private var traceRemaining = 128
+    private var lastTraceAt: UInt64 = 0
 
-    func trace(_ line: String) {
-        guard Self.tracing, traceRemaining > 0 else { return }
+    func trace(_ line: @autoclosure () -> String) {
+        guard Self.tracing else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        // Retain the first events after each idle spell, even in a process running for days.
+        // A held key still has a bounded budget; ordinary typing is never recorded.
+        if lastTraceAt == 0 || now &- lastTraceAt > 30_000_000_000 { traceRemaining = 128 }
+        lastTraceAt = now
+        guard traceRemaining > 0 else { return }
         traceRemaining -= 1
-        FileHandle.standardError.write(Data(("t=\(Date().timeIntervalSince1970) " + line + "\n").utf8))
+        FileHandle.standardError.write(Data(("t=\(Date().timeIntervalSince1970) " + line() + "\n").utf8))
     }
 
     nonisolated static func traceDescription(type: CGEventType, event: CGEvent) -> String? {
@@ -225,10 +236,17 @@ final class MediaKeyTap {
         let generation = stopGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
             guard let self, self.stopGeneration == generation, var pending = self.rawDowns[id] else { return }
+            self.trace("raw-fallback action=\(action) "
+                       + "event-age-ms=\(Double(DispatchTime.now().uptimeNanoseconds &- key.timestamp) / 1_000_000)")
             pending.result = self.dispatch(action, fineStep: key.fine)
             self.rawDowns[id] = pending
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.rawDowns[id] = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            if self?.rawDowns[id]?.result == nil, self?.rawDowns[id] != nil {
+                self?.trace("raw-expired-before-dispatch action=\(action)")
+            }
+            self?.rawDowns[id] = nil
+        }
         return true
     }
 
@@ -258,15 +276,29 @@ private func mediaKeyTapCallback(
     let tap = Unmanaged<MediaKeyTap>.fromOpaque(refcon).takeUnretainedValue()
 
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        MainActor.assumeIsolated { tap.reEnableIfNeeded() }
+        MainActor.assumeIsolated {
+            tap.trace("tap-disabled type=\(type.rawValue)")
+            tap.reEnableIfNeeded()
+            tap.trace("tap-rearmed enabled=\(tap.isRunning)")
+        }
         return Unmanaged.passUnretained(event)
     }
 
+    let began = DispatchTime.now().uptimeNanoseconds
     let input = MediaKeyTap.input(type: type, event: event)
+    if MediaKeyTap.tracing, let input {
+        MainActor.assumeIsolated {
+            tap.trace("capture-begin action=\(input.action) down=\(input.down) "
+                      + "event-age-ms=\(Double(began &- input.timestamp) / 1_000_000)")
+        }
+    }
     let consumed = input.map { key in MainActor.assumeIsolated { tap.consume(key) } } ?? false
     if MediaKeyTap.tracing, let line = MediaKeyTap.traceDescription(type: type, event: event) {
         let decision = input.map { "action=\($0.action) down=\($0.down)" } ?? "action=none"
-        MainActor.assumeIsolated { tap.trace("\(line) \(decision) consumed=\(consumed)") }
+        MainActor.assumeIsolated {
+            tap.trace("\(line) \(decision) consumed=\(consumed) "
+                      + "callback-ms=\(Double(DispatchTime.now().uptimeNanoseconds &- began) / 1_000_000)")
+        }
     }
     return consumed ? nil : Unmanaged.passUnretained(event)
 }
