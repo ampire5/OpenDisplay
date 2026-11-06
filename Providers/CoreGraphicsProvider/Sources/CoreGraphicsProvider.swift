@@ -243,7 +243,7 @@ public actor CoreGraphicsProvider: TopologyObserving, DisplayProvider, Lifecycle
     /// always-one-active-display invariant when a display is physically unplugged.
     public func changes() -> AsyncStream<Void> {
         startObserving()  // lazily register the OS callback on the first (long-lived) subscriber
-        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let id = UUID()
         changeContinuations[id] = continuation
         continuation.onTermination = { [weak self] _ in
@@ -262,7 +262,8 @@ public actor CoreGraphicsProvider: TopologyObserving, DisplayProvider, Lifecycle
         // hold the configuration), so the display list is mid-flight. React only to settled callbacks.
         let flags = CGDisplayChangeSummaryFlags(rawValue: rawFlags)
         if flags.contains(.beginConfigurationFlag) { return }
-        _ = currentTopology()
+        // Events invalidate state; consumers query a fresh snapshot. Pending callbacks may
+        // coalesce without dropping state or delaying recovery behind obsolete refreshes.
         for continuation in changeContinuations.values { continuation.yield(()) }
     }
 

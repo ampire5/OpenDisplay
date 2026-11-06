@@ -26,11 +26,31 @@ struct MenuBarView: View {
                                message: "Open Diagnostics in Settings to see which routes are degraded.")
                     .padding(.horizontal, 2).padding(.top, 2)
             }
+            if let error = model.faceLightError {
+                ODInlineBanner(tone: .orange, systemImage: "exclamationmark.triangle.fill",
+                               title: "Face Light needs attention", message: error)
+                    .padding(.horizontal, 2).padding(.top, 2)
+            }
+            #if !PUBLIC_API_ONLY
+            if let error = model.appPresetError {
+                ODInlineBanner(tone: .orange, systemImage: "exclamationmark.triangle.fill",
+                               title: "App preset needs attention", message: error)
+                    .padding(.horizontal, 2).padding(.top, 2)
+            }
+            ODDivider().padding(.vertical, 4)
+            ODSectionLabel("System")
+            SystemColourActions()
+            #endif
             ODDivider().padding(.vertical, 4)
             toolsSection
         }
         .padding(8)
         .frame(width: 320)
+        .task {
+            #if !PUBLIC_API_ONLY
+            await model.refreshSystemColors()
+            #endif
+        }
         .onChange(of: model.displays.count, initial: true) { _, _ in
             if expandedID == nil { expandedID = model.displays.first(where: { $0.isMain })?.recordID }
         }
@@ -71,12 +91,6 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
             .accessibilityLabel("Open Settings")
-            Button { NSApp.terminate(nil) } label: {
-                Image(systemName: "power").font(.system(size: 15))
-            }
-            .buttonStyle(.plain).foregroundStyle(.secondary)
-            .accessibilityLabel("Quit OpenDisplay")
-            .help("Quit OpenDisplay — reconnects any displays it turned off")
             Menu {
                 Toggle("Keep displays awake while external connected", isOn: Binding(
                     get: { model.settings.preventDisplaySleepWithExternal },
@@ -176,9 +190,8 @@ private struct DisplayCard: View {
             if isExpanded && display.isActive {
                 brightnessRow
                 if let volume = model.ddcControl(.volume, for: display) { volumeRow(volume) }
-                chipRow
                 quickActions
-                MenuActionRow(title: "Display settings…", systemImage: "slider.horizontal.3",
+                MenuActionRow(title: "Resolution & colour…", systemImage: "slider.horizontal.3",
                               showChevron: true) { onOpenSettings() }
             }
         }
@@ -243,6 +256,10 @@ private struct DisplayCard: View {
         }
     }
 
+    private var faceLightNeedsRestore: Bool {
+        model.settings.faceLightPriorStateByDisplay[id.rawValue] != nil
+    }
+
     private var brightnessRow: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -252,6 +269,8 @@ private struct DisplayCard: View {
                                    set: { model.setBrightness(Float($0), for: display) }),
                     valueText: "\(Int(((model.brightness[id] ?? 0.5) * 100).rounded()))%",
                     accessibilityLabel: "Brightness")
+                .disabled(faceLightNeedsRestore)
+                .help(faceLightNeedsRestore ? "Restore FaceLight before changing brightness" : "Brightness")
                 if model.xdrCapable(display) { xdrBoostToggle }
             }
             ForEach(brightnessCaptions, id: \.self) { caption in
@@ -294,38 +313,21 @@ private struct DisplayCard: View {
             accessibilityLabel: "Volume")
     }
 
-    private var chipRow: some View {
-        HStack(spacing: 6) {
-            if let mode = display.mode {
-                ODChip("\(mode.pointWidth) × \(mode.pointHeight)", systemImage: "rectangle.on.rectangle",
-                       action: onOpenSettings)
-                ODChip("\(Int(mode.refreshHz.rounded())) Hz", systemImage: "timer", action: onOpenSettings)
-                if mode.isHiDPI { ODChip("Retina", on: true) }
-            }
-            if model.currentRotation(for: display) != 0 {
-                ODChip("\(model.currentRotation(for: display))°", systemImage: "rotate.right",
-                       action: onOpenSettings)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8).padding(.top, 2)
-    }
-
     private var quickActions: some View {
-        HStack(spacing: 6) {
-            if !display.isMain {
-                ODQuickAction("Set as Main", systemImage: "star", enabled: !model.busy) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                ODQuickAction(display.isMain ? "Main Display" : "Set as Main", systemImage: "star",
+                              enabled: !model.busy && !display.isMain) {
                     // Close the pop-out first so set-main relocating the menu bar can't displace it.
                     NotificationCenter.default.post(name: .openDisplayDismissMenu, object: nil)
                     Task { await model.setMain(for: display) }
                 }
-            }
             ODQuickAction(model.isBlackedOut(display) ? "Restore" : "Black Out",
                           systemImage: model.isBlackedOut(display) ? "sun.max.fill" : "moon.fill") {
                 model.toggleBlackOut(for: display)
             }
-            ODQuickAction(model.isFaceLightActive(display) ? "Restore" : "FaceLight",
-                          systemImage: model.isFaceLightActive(display) ? "video.slash.fill" : "video.fill") {
+            ODQuickAction(faceLightNeedsRestore ? "Restore" : "FaceLight",
+                          systemImage: faceLightNeedsRestore ? "video.slash.fill" : "video.fill",
+                          isOn: model.isFaceLightActive(display)) {
                 model.toggleFaceLight(for: display)
             }
             ODQuickAction("Turn Off", systemImage: "power", tone: .red,
@@ -336,6 +338,39 @@ private struct DisplayCard: View {
         .padding(.horizontal, 8).padding(.top, 2)
     }
 }
+
+#if !PUBLIC_API_ONLY
+private struct SystemColourActions: View {
+    @EnvironmentObject private var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                ODQuickAction("Night Shift", systemImage: "moon.stars.fill",
+                              enabled: model.systemColorState.nightShift != nil,
+                              isOn: model.systemColorState.nightShift) {
+                    let value = !(model.systemColorState.nightShift ?? false)
+                    Task { await model.setGlobalNightShift(value) }
+                }
+                .help("Toggle macOS Night Shift for all supported displays")
+                ODQuickAction("True Tone", systemImage: "sun.max.circle.fill",
+                              enabled: model.systemColorState.trueTone != nil,
+                              isOn: model.systemColorState.trueTone) {
+                    let value = !(model.systemColorState.trueTone ?? false)
+                    Task { await model.setGlobalTrueTone(value) }
+                }
+                .help("Toggle macOS True Tone for all supported displays")
+            }
+            Text("System-wide · affects supported displays")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+            if let error = model.systemColorError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .padding(.horizontal, 8)
+        .task { await model.refreshSystemColors() }
+    }
+}
+#endif
 
 /// A display the app has turned off: stays visible (dimmed) with a Reconnect affordance. The OS no
 /// longer enumerates it, so its data comes from AppModel's managed-offline list.

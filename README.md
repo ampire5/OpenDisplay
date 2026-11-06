@@ -56,8 +56,9 @@ no Dock icon.
   fighting them. On the built-in panel and Apple's own displays (Pro Display XDR, Studio
   Display), changes made with the macOS brightness keys or System Settings sync too, even
   while the menu is closed (full build). Optional contrast sync.
-- **FaceLight** — one press turns your monitor into a warm video-call fill light; press
-  again and your exact previous brightness, contrast, and dimming come back.
+- **FaceLight** — raises brightness and adds a warm video-call fill light while preserving
+  monitor contrast. The previous brightness is read before activation, and its recovery state
+  is retained until restoration is verified.
 - **XDR Brightness** (Labs) — one tap drives the MacBook Pro's XDR panel to **2× its normal
   SDR maximum**, using the HDR headroom Apple reserves for video. Public APIs only, and it
   can never outlive the app — quit (or crash) and the panel is back to normal.
@@ -168,6 +169,36 @@ Then click the display glyph in the menu bar. Two optional one-time steps:
 ### Option 2 — build from source
 
 Prefer to build it yourself? See [Building the macOS app](#building-the-macos-app-on-a-mac) below.
+
+### HUD styles and app presets
+
+Settings has a dedicated **App Presets** section. A preset can leave Night Shift and True Tone
+unchanged, turn them on, or turn them off. These two controls are **system-wide**, independent of
+its display target. Their original values are recorded before changing them and restored when
+the preset stops applying; unsupported controls are disabled. The global switches are also in
+the menu bar's More menu.
+
+**Modern (app HUD)** is OpenDisplay's compact glass indicator, not the system indicator.
+The full build optionally calibrates the native glass renderer to preserve backdrop detail;
+if its private material parameters are unavailable, the standard system glass remains in use.
+**System HUD (legacy)** asks macOS's OSD service to draw its older indicator. On macOS 26 and
+later this service does not provide the modern Control Center indicator. With either style,
+brightness keys explicitly drive the selected display, so macOS cannot re-route them to a
+different screen. Modern HUDs appear at that display's top-right; sliders in the menu do not show
+an extra HUD. Minimal and Classic remain app-owned alternatives.
+
+For an ad-hoc local build without a Developer ID certificate, override signing and hardened runtime
+for that build only; signed distribution should retain hardened runtime:
+
+```sh
+xcodebuild -scheme OpenDisplay -configuration Release -derivedDataPath build/local \
+  CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual ENABLE_HARDENED_RUNTIME=NO build
+xcodebuild -scheme opendisplay -configuration Release -derivedDataPath build/local \
+  CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual ENABLE_HARDENED_RUNTIME=NO build
+./scripts/check-macos.sh                   # ICC, topology stream, system-mode reads
+./scripts/check-macos.sh --exercise-modes  # briefly toggle and restore supported system modes
+./scripts/check-macos.sh --show-huds       # visually show system-legacy and Modern HUDs
+```
 
 ## Principles
 

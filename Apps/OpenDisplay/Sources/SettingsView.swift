@@ -27,6 +27,7 @@ struct SettingsView: View {
             case .displays: DisplaysSection()
             case .arrange: ArrangeSection()
             case .scenes: ScenesSection()
+            case .appPresets: AppPresetsSection()
             case .health: HealthSection()
             case .about: AboutSection()
             }
@@ -45,13 +46,14 @@ struct SettingsView: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-    case displays, arrange, scenes, health, about
+    case displays, arrange, scenes, appPresets, health, about
     var id: String { rawValue }
     var title: String {
         switch self {
         case .displays: return "Displays"
         case .arrange: return "Arrange"
         case .scenes: return "Scenes"
+        case .appPresets: return "App Presets"
         case .health: return "Health & Recovery"
         case .about: return "About"
         }
@@ -61,8 +63,26 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .displays: return "display"
         case .arrange: return "rectangle.3.group"
         case .scenes: return "square.stack.3d.up"
+        case .appPresets: return "app.badge"
         case .health: return "stethoscope"
         case .about: return "info.circle"
+        }
+    }
+}
+
+private struct AppPresetsSection: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                #if !PUBLIC_API_ONLY
+                SystemColorControlsCard()
+                AppPresetsCard()
+                #else
+                Text("App presets and system colour controls require the full build.")
+                    .foregroundStyle(.secondary)
+                #endif
+            }
+            .padding(16)
         }
     }
 }
@@ -480,7 +500,8 @@ private struct HealthSection: View {
                     HStack {
                         Picker("Style", selection: Binding(
                             get: { model.settings.osdStyle }, set: { model.setOSDStyle($0) })) {
-                            Text("Native").tag(OSDStyle.native)
+                            Text("System HUD (legacy)").tag(OSDStyle.native)
+                            Text("Modern (app HUD)").tag(OSDStyle.modern)
                             Text("Minimal").tag(OSDStyle.minimal)
                             Text("Classic").tag(OSDStyle.classicTahoe)
                             Text("External HUD only").tag(OSDStyle.external)
@@ -493,7 +514,18 @@ private struct HealthSection: View {
                             Text("Center").tag(OSDPosition.center)
                         }
                         .fixedSize()
+                        .disabled(model.settings.osdStyle == .modern || model.settings.osdStyle == .native)
                     }
+                }
+                if model.settings.osdStyle == .modern {
+                    Text("Keyboard changes show the HUD at the selected display’s top-right. Menu sliders do not show another HUD.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.settings.osdStyle == .native {
+                    Text(model.nativeOSDAvailable
+                         ? "Uses the system OSD service. On macOS 26 and later this shows the older HUD, not the modern Control Center indicator."
+                         : "System HUD is unavailable in this build. Choose Minimal or Classic for an app HUD.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle(isOn: Binding(
                     get: { model.settings.publishOSDEventsEnabled },
@@ -661,8 +693,6 @@ private struct HealthSection: View {
                 Divider()
                 ClockModeCard()
 
-                Divider()
-                AppPresetsCard()
                 #endif
 
                 Divider()
@@ -1114,6 +1144,27 @@ private struct ClockLocationRow: View {
     }
 }
 
+private struct SystemColorControlsCard: View {
+    @EnvironmentObject private var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("System colour controls").font(.title3)
+            Toggle("Night Shift", isOn: Binding(
+                get: { model.systemColorState.nightShift ?? false },
+                set: { value in Task { await model.setGlobalNightShift(value) } }))
+                .disabled(model.systemColorState.nightShift == nil)
+            Toggle("True Tone", isOn: Binding(
+                get: { model.systemColorState.trueTone ?? false },
+                set: { value in Task { await model.setGlobalTrueTone(value) } }))
+                .disabled(model.systemColorState.trueTone == nil)
+            Text("These macOS settings affect all supported displays. Unavailable controls are disabled.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error = model.systemColorError { Text(error).font(.caption).foregroundStyle(.red) }
+        }
+        .task { await model.refreshSystemColors() }
+    }
+}
+
 private struct AppPresetsCard: View {
     @EnvironmentObject private var model: AppModel
 
@@ -1242,12 +1293,30 @@ private struct AppPresetRow: View {
                     .labelsHidden().fixedSize()
                 }
             }
+            HStack {
+                Picker("Night Shift", selection: systemModeBinding(\.nightShift)) {
+                    Text("Unchanged").tag(Optional<Bool>.none)
+                    Text("On").tag(Optional(true))
+                    Text("Off").tag(Optional(false))
+                }
+                Picker("True Tone", selection: systemModeBinding(\.trueTone)) {
+                    Text("Unchanged").tag(Optional<Bool>.none)
+                    Text("On").tag(Optional(true))
+                    Text("Off").tag(Optional(false))
+                }
+            }
+            Text("Night Shift and True Tone are system-wide; their previous values restore when this app leaves the front.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
     }
 
     private var externalDisplays: [DisplayObservation] {
         model.displays.filter { $0.displayClass != .builtIn && $0.isActive }
+    }
+
+    private func systemModeBinding(_ keyPath: WritableKeyPath<AppPresetPolicy.AppPreset, Bool?>) -> Binding<Bool?> {
+        Binding(get: { preset[keyPath: keyPath] }, set: { value in updating { $0[keyPath: keyPath] = value } })
     }
 
     private var targetBinding: Binding<AppPresetPolicy.Target> {

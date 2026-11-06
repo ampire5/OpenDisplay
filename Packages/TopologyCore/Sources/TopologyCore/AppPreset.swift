@@ -46,11 +46,13 @@ public enum AppPresetPolicy {
         public var brightness: Float?
         public var contrast: Float?
         public var colorPreset: Int?
+        public var nightShift: Bool?
+        public var trueTone: Bool?
         public var target: Target
 
         public init(id: UUID = UUID(), bundleIdentifier: String, applicationName: String,
                     brightness: Float? = nil, contrast: Float? = nil, colorPreset: Int? = nil,
-                    target: Target = .allDisplays) {
+                    target: Target = .allDisplays, nightShift: Bool? = nil, trueTone: Bool? = nil) {
             self.id = id
             self.bundleIdentifier = bundleIdentifier
             self.applicationName = applicationName
@@ -58,11 +60,13 @@ public enum AppPresetPolicy {
             self.contrast = contrast
             self.colorPreset = colorPreset
             self.target = target
+            self.nightShift = nightShift
+            self.trueTone = trueTone
         }
 
         /// Whether this preset drives any hardware channel at all (an empty preset is a no-op).
         public var hasAnyWrite: Bool {
-            brightness != nil || contrast != nil || colorPreset != nil
+            brightness != nil || contrast != nil || colorPreset != nil || nightShift != nil || trueTone != nil
         }
     }
 
@@ -88,13 +92,22 @@ public enum AppPresetPolicy {
         public var brightness: Float?
         public var contrast: Float?
         public var colorPreset: Int?
+        /// Fresh hardware observations explicitly verified by the caller for this evaluation.
+        /// Cached or optimistically applied values must not populate these fields.
+        public var confirmedBrightness: Float?
+        public var confirmedContrast: Float?
+        public var confirmedColorPreset: Int?
 
         public init(recordID: String, brightness: Float? = nil, contrast: Float? = nil,
-                    colorPreset: Int? = nil) {
+                    colorPreset: Int? = nil, confirmedBrightness: Float? = nil,
+                    confirmedContrast: Float? = nil, confirmedColorPreset: Int? = nil) {
             self.recordID = recordID
             self.brightness = brightness
             self.contrast = contrast
             self.colorPreset = colorPreset
+            self.confirmedBrightness = confirmedBrightness
+            self.confirmedContrast = confirmedContrast
+            self.confirmedColorPreset = confirmedColorPreset
         }
     }
 
@@ -104,13 +117,16 @@ public enum AppPresetPolicy {
     /// ledger keyed by `DisplayRecordID.rawValue`.
     public struct ActivationState: Hashable, Sendable {
         public var activeBundleID: String?
+        public var appliedPreset: AppPreset?
         public var pendingBundleID: String?
         public var pendingSince: Date?
         public var priorStateByDisplay: [String: PriorState]
 
         public init(activeBundleID: String? = nil, pendingBundleID: String? = nil,
-                    pendingSince: Date? = nil, priorStateByDisplay: [String: PriorState] = [:]) {
+                    pendingSince: Date? = nil, priorStateByDisplay: [String: PriorState] = [:],
+                    appliedPreset: AppPreset? = nil) {
             self.activeBundleID = activeBundleID
+            self.appliedPreset = appliedPreset
             self.pendingBundleID = pendingBundleID
             self.pendingSince = pendingSince
             self.priorStateByDisplay = priorStateByDisplay
@@ -152,17 +168,22 @@ public enum AppPresetPolicy {
         }
     }
 
-    /// What the caller should do this evaluation. Apply in THIS order to hold the restore-owed
-    /// invariant across a crash: persist every `captures` entry into the ledger FIRST (before the
-    /// preset write makes a restore owed), issue `applyWrites`, issue `restoreWrites`, then persist the
-    /// `clears` removals (only after those restores land). Finally store `state`. `appPresetIsActive`
-    /// drives the Adaptive/Clock pause on the governed displays; `rescheduleAfter`, when non-nil, asks
+    /// What the caller should do this evaluation. To hold the restore-owed invariant across a
+    /// crash, persist every `captures` entry FIRST, before issuing any write. Revalidate and issue
+    /// `intentWrites` and `restoreWrites`, with colour-mode changes before dependent continuous
+    /// writes. Persist `clears` removals only after those restores land. Finally store `state`. `appPresetIsActive`
+    /// drives the Adaptive/Clock pause on the governed displays. `applyWrites` is the planning-time
+    /// filtered subset; execution must revalidate full `intentWrites` after any suspension because
+    /// intervening writes can invalidate the snapshot. `rescheduleAfter`, when non-nil, asks
     /// the caller to re-run `resolve` after that delay (the debounce window is still open).
     public struct Decision: Hashable, Sendable {
         public var captures: [String: PriorState]
         public var applyWrites: [DisplayWrite]
+        /// Complete requested writes, retained for execution-time revalidation after suspension.
+        public var intentWrites: [DisplayWrite]
         public var restoreWrites: [DisplayWrite]
         public var clears: [String]
+        public var baselineUpdates: [String: PriorState]
         public var state: ActivationState
         public var appPresetIsActive: Bool
         public var rescheduleAfter: TimeInterval?
@@ -170,11 +191,14 @@ public enum AppPresetPolicy {
         public init(captures: [String: PriorState] = [:], applyWrites: [DisplayWrite] = [],
                     restoreWrites: [DisplayWrite] = [], clears: [String] = [],
                     state: ActivationState, appPresetIsActive: Bool,
-                    rescheduleAfter: TimeInterval? = nil) {
+                    rescheduleAfter: TimeInterval? = nil, baselineUpdates: [String: PriorState] = [:],
+                    intentWrites: [DisplayWrite] = []) {
             self.captures = captures
             self.applyWrites = applyWrites
+            self.intentWrites = intentWrites
             self.restoreWrites = restoreWrites
             self.clears = clears
+            self.baselineUpdates = baselineUpdates
             self.state = state
             self.appPresetIsActive = appPresetIsActive
             self.rescheduleAfter = rescheduleAfter
@@ -229,17 +253,29 @@ public enum AppPresetPolicy {
 
         let restore = restoreDisplaysLeaving(targetSet: Set(targetIDs),
                                              presentIDs: presentIDs(input), ledger: &ledger)
-        // Only newcomers (no ledger entry yet) are captured + written — steady state must not
-        // re-issue DDC writes for displays already governed.
-        let newcomers = targetIDs.filter { state.priorStateByDisplay[$0] == nil }
+        // Reconcile newcomers, edits, or channels whose previously unavailable baseline now has
+        // a fresh observation. A missing baseline alone must not repeatedly retry unsupported VCPs.
+        let edited = state.appliedPreset.map {
+            $0.target != active?.target || $0.brightness != active?.brightness
+                || $0.contrast != active?.contrast || $0.colorPreset != active?.colorPreset
+        } ?? false
+        let newcomers = targetIDs.filter { recordID in
+            guard !edited, let prior = state.priorStateByDisplay[recordID] else { return true }
+            guard let active, let current = snapshot(recordID, in: input.displays) else { return false }
+            return (active.brightness != nil && prior.brightness == nil && current.confirmedBrightness != nil)
+                || (active.contrast != nil && prior.contrast == nil && current.confirmedContrast != nil)
+                || (active.colorPreset != nil && prior.colorPreset == nil && current.confirmedColorPreset != nil)
+        }
         let application = applyIncoming(active, targetIDs: newcomers, displays: input.displays,
                                         ledger: &ledger)
 
         var finalState = state
+        finalState.appliedPreset = active
         finalState.priorStateByDisplay = ledger
         return Decision(captures: application.captures, applyWrites: application.writes,
-                        restoreWrites: restore.writes, clears: restore.clears, state: finalState,
-                        appPresetIsActive: state.activeBundleID != nil)
+                        restoreWrites: restore.writes + application.restores, clears: restore.clears, state: finalState,
+                        appPresetIsActive: state.activeBundleID != nil, baselineUpdates: application.baselineUpdates,
+                        intentWrites: application.intents)
     }
 
     private static func pendingDecision(state: ActivationState, reschedule: TimeInterval) -> Decision {
@@ -263,10 +299,12 @@ public enum AppPresetPolicy {
 
         var finalState = withoutPending(state)
         finalState.activeBundleID = desiredBundleID
+        finalState.appliedPreset = incoming
         finalState.priorStateByDisplay = ledger
         return Decision(captures: application.captures, applyWrites: application.writes,
-                        restoreWrites: restore.writes, clears: restore.clears, state: finalState,
-                        appPresetIsActive: desiredBundleID != nil)
+                        restoreWrites: restore.writes + application.restores, clears: restore.clears, state: finalState,
+                        appPresetIsActive: desiredBundleID != nil, baselineUpdates: application.baselineUpdates,
+                        intentWrites: application.intents)
     }
 
     /// Restore every owed display that the incoming preset no longer governs, dropping its ledger
@@ -300,19 +338,46 @@ public enum AppPresetPolicy {
     /// incoming preset's values.
     private static func applyIncoming(_ incoming: AppPreset?, targetIDs: [String],
                                       displays: [DisplaySnapshot], ledger: inout [String: PriorState])
-        -> (captures: [String: PriorState], writes: [DisplayWrite]) {
-        guard let incoming else { return ([:], []) }
+        -> (captures: [String: PriorState], writes: [DisplayWrite], restores: [DisplayWrite],
+            baselineUpdates: [String: PriorState], intents: [DisplayWrite]) {
+        guard let incoming else { return ([:], [], [], [:], []) }
         var captures: [String: PriorState] = [:]
         var writes: [DisplayWrite] = []
+        var restores: [DisplayWrite] = []
+        var intents: [DisplayWrite] = []
+        var baselineUpdates: [String: PriorState] = [:]
         for recordID in targetIDs {
-            if ledger[recordID] == nil {
-                let prior = capturePrior(preset: incoming, snapshot: snapshot(recordID, in: displays))
+            let current = snapshot(recordID, in: displays)
+            let observed = capturePrior(preset: incoming, snapshot: current)
+            let old = ledger[recordID]
+            let prior = PriorState(brightness: old?.brightness ?? observed.brightness,
+                                   contrast: old?.contrast ?? observed.contrast,
+                                   colorPreset: old?.colorPreset ?? observed.colorPreset)
+            if old != prior {
                 captures[recordID] = prior
                 ledger[recordID] = prior
             }
-            writes.append(applyWrite(recordID: recordID, preset: incoming))
+            let released = DisplayWrite(recordID: recordID,
+                brightness: incoming.brightness == nil ? old?.brightness : nil,
+                contrast: incoming.contrast == nil ? old?.contrast : nil,
+                colorPreset: incoming.colorPreset == nil ? old?.colorPreset : nil)
+            if released.brightness != nil || released.contrast != nil || released.colorPreset != nil {
+                restores.append(released)
+                let retained = PriorState(brightness: incoming.brightness != nil ? prior.brightness : nil,
+                    contrast: incoming.contrast != nil ? prior.contrast : nil,
+                    colorPreset: incoming.colorPreset != nil ? prior.colorPreset : nil)
+                ledger[recordID] = retained
+                baselineUpdates[recordID] = retained
+            }
+            intents.append(DisplayWrite(recordID: recordID, brightness: incoming.brightness,
+                                        contrast: incoming.contrast, colorPreset: incoming.colorPreset))
+            let write = applyWrite(recordID: recordID, preset: incoming, snapshot: current,
+                                   releasedColorPreset: released.colorPreset)
+            if write.brightness != nil || write.contrast != nil || write.colorPreset != nil {
+                writes.append(write)
+            }
         }
-        return (captures, writes)
+        return (captures, writes, restores, baselineUpdates, intents)
     }
 
     // MARK: - Resolution helpers
@@ -332,6 +397,7 @@ public enum AppPresetPolicy {
 
     private static func targetDisplayIDs(_ preset: AppPreset,
                                          displays: [DisplaySnapshot]) -> [String] {
+        guard preset.brightness != nil || preset.contrast != nil || preset.colorPreset != nil else { return [] }
         switch preset.target {
         case .allDisplays:
             return displays.map(\.recordID)
@@ -346,9 +412,19 @@ public enum AppPresetPolicy {
                    colorPreset: preset.colorPreset != nil ? snapshot?.colorPreset : nil)
     }
 
-    private static func applyWrite(recordID: String, preset: AppPreset) -> DisplayWrite {
-        DisplayWrite(recordID: recordID, brightness: preset.brightness, contrast: preset.contrast,
-                     colorPreset: preset.colorPreset)
+    private static func applyWrite(recordID: String, preset: AppPreset,
+                                   snapshot: DisplaySnapshot?, releasedColorPreset: Int?) -> DisplayWrite {
+        // Applying or restoring a colour mode can reset brightness/contrast, so observations
+        // cannot suppress those writes unless the effective mode is already verified unchanged.
+        let effectiveColorPreset = preset.colorPreset ?? releasedColorPreset
+        let modeUnchanged = effectiveColorPreset == nil
+            || effectiveColorPreset == snapshot?.confirmedColorPreset
+        return DisplayWrite(recordID: recordID,
+            brightness: modeUnchanged && preset.brightness == snapshot?.confirmedBrightness
+                ? nil : preset.brightness,
+            contrast: modeUnchanged && preset.contrast == snapshot?.confirmedContrast
+                ? nil : preset.contrast,
+            colorPreset: preset.colorPreset == snapshot?.confirmedColorPreset ? nil : preset.colorPreset)
     }
 
     private static func restoreWrite(recordID: String, prior: PriorState) -> DisplayWrite {

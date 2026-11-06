@@ -13,7 +13,7 @@ import ObjectiveC
 ///
 /// Deliberate fragility containment: `getBlueLightStatus:` fills a caller-provided struct whose
 /// TAIL has grown across macOS releases. We never declare that struct. We hand the call a zeroed
-/// buffer far larger than any known layout and read only byte 0 — the `active` BOOL, whose offset
+/// buffer far larger than any known layout and read only byte 1 — the `enabled` BOOL, whose offset
 /// has been stable since Night Shift shipped (10.12.4). If Apple ever moves even that, the worst
 /// case is a wrong warm/cool phase, never memory corruption — and the schedule fallback remains
 /// the documented behavior.
@@ -56,7 +56,9 @@ public struct NightShiftStatusReader: Sendable {
             return getStatus(client, selector, base).boolValue
         }
         guard ok else { return nil }
-        return buffer[0] != 0  // offset 0 = `active` BOOL, stable since 10.12.4
+        // The leading `active` flag describes the service and can remain true with the tint off.
+        // Read `enabled`, verified against setEnabled: transitions rather than service activity.
+        return buffer[1] != 0
     }
 }
 #endif

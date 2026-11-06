@@ -21,6 +21,19 @@ final class MediaKeyTap {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var sessionProbe: CFMachPort?
+    private var probeSource: CFRunLoopSource?
+    private var handledPresses: Set<MediaKeyAction> = []
+    private var rawPresses: Set<MediaKeyAction> = []
+    private struct RawDown {
+        var action: MediaKeyAction
+        var timestamp: CGEventTimestamp
+        var result: Bool?
+    }
+    private var rawDowns: [UUID: RawDown] = [:]
+    private var systemDowns: [UUID: KeyInput] = [:]
+    private var systemPresses: Set<MediaKeyAction> = []
+    private var stopGeneration: UInt64 = 0
 
     init(handler: @escaping @MainActor (MediaKeyAction, _ fineStep: Bool) -> Bool) {
         self.handler = handler
@@ -41,29 +54,57 @@ final class MediaKeyTap {
     /// can't be created — the keys then reach macOS unchanged.
     @discardableResult
     func start() -> Bool {
-        guard eventTap == nil else { return true }
+        if let eventTap {
+            if !CGEvent.tapIsEnabled(tap: eventTap) { CGEvent.tapEnable(tap: eventTap, enable: true) }
+            return CGEvent.tapIsEnabled(tap: eventTap)
+        }
         guard Self.isAccessibilityTrusted else { return false }
 
-        let mask = CGEventMask(1 << 14) // NSEvent.EventType.systemDefined
+        let mask = CGEventMask(1 << 14) | CGEventMask(1 << CGEventType.keyDown.rawValue)
+            | CGEventMask(1 << CGEventType.keyUp.rawValue)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-            eventsOfInterest: mask, callback: mediaKeyTapCallback, userInfo: refcon
-        ) else { return false }
+        func create(at location: CGEventTapLocation) -> CFMachPort? {
+            CGEvent.tapCreate(tap: location, place: .headInsertEventTap, options: .defaultTap,
+                              eventsOfInterest: mask, callback: mediaKeyTapCallback, userInfo: refcon)
+        }
+        guard let tap = create(at: .cghidEventTap) ?? create(at: .cgSessionEventTap) else { return false }
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         eventTap = tap
         runLoopSource = source
+        if Self.tracing, let probe = CGEvent.tapCreate(tap: .cgSessionEventTap,
+            place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: CGEventMask(1 << 14),
+            callback: mediaKeySessionProbe, userInfo: refcon) {
+            sessionProbe = probe
+            let probeRunLoop = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, probe, 0)
+            probeSource = probeRunLoop
+            CFRunLoopAddSource(CFRunLoopGetMain(), probeRunLoop, .commonModes)
+        }
         return true
+    }
+
+    var isRunning: Bool {
+        guard let eventTap else { return false }
+        return CGEvent.tapIsEnabled(tap: eventTap)
     }
 
     func stop() {
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        if let sessionProbe { CGEvent.tapEnable(tap: sessionProbe, enable: false) }
+        if let probeSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), probeSource, .commonModes) }
+        sessionProbe = nil
+        probeSource = nil
         eventTap = nil
         runLoopSource = nil
+        handledPresses.removeAll()
+        rawPresses.removeAll()
+        rawDowns.removeAll()
+        systemDowns.removeAll()
+        systemPresses.removeAll()
+        stopGeneration &+= 1
     }
 
     /// Re-arm the tap if the system disabled it (timeout / user input). Called from the C callback.
@@ -72,22 +113,137 @@ final class MediaKeyTap {
     }
 
     /// Dispatch a decoded media key to the handler; returns whether it was consumed.
-    func dispatch(_ action: MediaKeyAction, fineStep: Bool) -> Bool {
-        handler(action, fineStep)
+    func dispatch(_ action: MediaKeyAction, fineStep: Bool, isDown: Bool = true) -> Bool {
+        if !isDown { return handledPresses.remove(action) != nil }
+        let consumed = handler(action, fineStep)
+        if consumed { handledPresses.insert(action) } else { handledPresses.remove(action) }
+        return consumed
+    }
+
+    nonisolated static let tracing = ProcessInfo.processInfo.environment["OPENDISPLAY_KEY_TRACE"] == "1"
+    private var traceRemaining = 128
+
+    func trace(_ line: String) {
+        guard Self.tracing, traceRemaining > 0 else { return }
+        traceRemaining -= 1
+        FileHandle.standardError.write(Data(("t=\(Date().timeIntervalSince1970) " + line + "\n").utf8))
+    }
+
+    nonisolated static func traceDescription(type: CGEventType, event: CGEvent) -> String? {
+        if type.rawValue == 14, let ns = NSEvent(cgEvent: event), ns.subtype.rawValue == 8 {
+            return "brightness-input system subtype=\(ns.subtype.rawValue) data1=\(ns.data1) flags=\(event.flags.rawValue)"
+        }
+        guard type == .keyDown || type == .keyUp else { return nil }
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        guard [107, 113, 120, 122, 144, 145].contains(code) else { return nil }
+        return "brightness-input type=\(type.rawValue) keycode=\(code) flags=\(event.flags.rawValue)"
+    }
+
+    struct KeyInput: Sendable {
+        var action: MediaKeyAction
+        var fine: Bool
+        var down: Bool
+        var timestamp: CGEventTimestamp
+        var isSystem: Bool
+    }
+
+    nonisolated static func input(type: CGEventType, event: CGEvent) -> KeyInput? {
+        if type.rawValue == 14 {
+            guard let key = decode(event) else { return nil }
+            return KeyInput(action: key.action, fine: key.fineStep, down: key.isDown,
+                            timestamp: event.timestamp, isSystem: true)
+        }
+        guard type == .keyDown || type == .keyUp else { return nil }
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        let action: MediaKeyAction
+        switch code {
+        // Third-party keyboards may encode their brightness legends as F14/F15.
+        // secondaryFn is normal on these events and does not make them plain F1/F2.
+        case 144, 113: action = .brightnessUp
+        case 145, 107: action = .brightnessDown
+        case 122, 120:
+            guard type == .keyUp || !event.flags.contains(.maskSecondaryFn) else { return nil }
+            action = code == 122 ? .brightnessDown : .brightnessUp
+        default: return nil
+        }
+        guard type == .keyUp || (!event.flags.contains(.maskCommand) && !event.flags.contains(.maskControl)) else { return nil }
+        return KeyInput(action: action,
+            fine: event.flags.contains(.maskShift) && event.flags.contains(.maskAlternate),
+            down: type == .keyDown, timestamp: event.timestamp, isSystem: false)
+    }
+
+    func consume(type: CGEventType, event: CGEvent) -> Bool {
+        guard let key = Self.input(type: type, event: event) else { return false }
+        return consume(key)
+    }
+
+    /// Pair each plain and NX down at most once. Keep already-delivered plain downs briefly:
+    /// a late NX twin must still be suppressed after the fallback timer has fired.
+    func consume(_ key: KeyInput) -> Bool {
+        let action = key.action
+        func nearby(_ lhs: UInt64, _ rhs: UInt64) -> Bool {
+            (lhs > rhs ? lhs - rhs : rhs - lhs) < 80_000_000
+        }
+        if key.isSystem {
+            if !key.down {
+                let consumed = systemPresses.remove(action) != nil
+                _ = dispatch(action, fineStep: key.fine, isDown: false)
+                return consumed
+            }
+            let pair = rawDowns.filter { $0.value.action == action && nearby($0.value.timestamp, key.timestamp) }
+                .min { $0.value.timestamp < $1.value.timestamp }
+            let consumed: Bool
+            if let pair {
+                rawDowns[pair.key] = nil
+                consumed = pair.value.result ?? dispatch(action, fineStep: key.fine)
+            } else {
+                consumed = dispatch(action, fineStep: key.fine)
+                let id = UUID()
+                systemDowns[id] = key
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.systemDowns[id] = nil }
+            }
+            if consumed { systemPresses.insert(action) }
+            return consumed
+        }
+        if !key.down {
+            guard rawPresses.remove(action) != nil else { return false }
+            let generation = stopGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+                guard let self, self.stopGeneration == generation else { return }
+                _ = self.dispatch(action, fineStep: key.fine, isDown: false)
+            }
+            return true
+        }
+        rawPresses.insert(action)
+        if let pair = systemDowns.filter({ $0.value.action == action && nearby($0.value.timestamp, key.timestamp) })
+            .min(by: { $0.value.timestamp < $1.value.timestamp }) {
+            systemDowns[pair.key] = nil
+            return true
+        }
+        let id = UUID()
+        rawDowns[id] = RawDown(action: action, timestamp: key.timestamp)
+        let generation = stopGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+            guard let self, self.stopGeneration == generation, var pending = self.rawDowns[id] else { return }
+            pending.result = self.dispatch(action, fineStep: key.fine)
+            self.rawDowns[id] = pending
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.rawDowns[id] = nil }
+        return true
     }
 
     /// Decode a systemDefined CGEvent into a media-key action (+ fine-step modifier), or nil if it isn't
     /// a media-key *press* we care about. `nonisolated` + pure of actor state — returns only Sendable
     /// values, so the C callback can do this outside the main-actor hop (CGEvent isn't Sendable).
-    nonisolated static func decode(_ cgEvent: CGEvent) -> (action: MediaKeyAction, fineStep: Bool)? {
+    nonisolated static func decode(_ cgEvent: CGEvent) -> (action: MediaKeyAction, fineStep: Bool, isDown: Bool)? {
         guard let nsEvent = NSEvent(cgEvent: cgEvent), nsEvent.subtype.rawValue == 8 else { return nil }
         let data1 = nsEvent.data1
         let keyCode = Int((data1 & 0xFFFF_0000) >> 16)
         let keyFlags = data1 & 0x0000_FFFF
         let isKeyDown = ((keyFlags & 0xFF00) >> 8) == 0x0A
-        guard isKeyDown, let action = MediaKeyAction.from(nxKeyType: keyCode) else { return nil }
+        guard let action = MediaKeyAction.from(nxKeyType: keyCode) else { return nil }
         let fineStep = nsEvent.modifierFlags.contains(.shift) && nsEvent.modifierFlags.contains(.option)
-        return (action, fineStep)
+        return (action, fineStep, isKeyDown)
     }
 }
 
@@ -106,8 +262,20 @@ private func mediaKeyTapCallback(
         return Unmanaged.passUnretained(event)
     }
 
-    guard let decoded = MediaKeyTap.decode(event) else { return Unmanaged.passUnretained(event) }
-    let consumed = MainActor.assumeIsolated { tap.dispatch(decoded.action, fineStep: decoded.fineStep) }
+    let input = MediaKeyTap.input(type: type, event: event)
+    let consumed = input.map { key in MainActor.assumeIsolated { tap.consume(key) } } ?? false
+    if MediaKeyTap.tracing, let line = MediaKeyTap.traceDescription(type: type, event: event) {
+        let decision = input.map { "action=\($0.action) down=\($0.down)" } ?? "action=none"
+        MainActor.assumeIsolated { tap.trace("\(line) \(decision) consumed=\(consumed)") }
+    }
     return consumed ? nil : Unmanaged.passUnretained(event)
+}
+private func mediaKeySessionProbe(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent,
+                                  refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
+    if let refcon, let line = MediaKeyTap.traceDescription(type: type, event: event) {
+        let tap = Unmanaged<MediaKeyTap>.fromOpaque(refcon).takeUnretainedValue()
+        MainActor.assumeIsolated { tap.trace("session-probe " + line) }
+    }
+    return Unmanaged.passUnretained(event)
 }
 #endif

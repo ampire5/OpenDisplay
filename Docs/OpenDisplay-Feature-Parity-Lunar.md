@@ -36,7 +36,7 @@ Several of Lunar's Pro features are free in OpenDisplay.
 | Multi-monitor support | Free | ✅ EDID-identity matching (correct on docks/twin monitors) |
 | Colour warmth | — | ✅ Night-Shift-following (0.4.0) + manual 2700–9300 K slider (0.5.0) — Lunar doesn't headline this |
 | Clock Mode (scheduled brightness) | **Pro** | ✅ First-class Clock Mode (0.6.0): time/sunrise/noon/sunset anchors, per-anchor offsets, instant/ramp/continuous transitions, NOAA solar math |
-| FaceLight (video-call fill light) | **Pro** | ✅ Max DDC + warm translucent overlay, crash-safe exact-state restore (0.6.0) |
+| FaceLight (video-call fill light) | **Pro** | ✅ Brightness boost + warm translucent overlay; contrast preserved, verified-state restoration |
 | Location Mode (sun-elevation brightness) | **Pro** | ✅ NOAA elevation math, civil-twilight→20° ramp, Adaptive Display source (0.7.0) |
 | App Presets (per-app switching) | **Pro** | ✅ Debounced frontmost tracking, crash-safe restore ledger, tested arbitration (0.7.0) |
 | Input Hotkeys (jump to input) | Free | ✅ Per-input global hotkeys, EDID-persistent targets, OSD confirm (0.6.0) |
@@ -51,9 +51,9 @@ Several of Lunar's Pro features are free in OpenDisplay.
 
 ## Todos (1 open · 6 shipped) — filed as issues, ordered by value-per-effort
 
-1. ~~**FaceLight**~~ — ✅ **Shipped (0.6.0, Issue #29).** Max DDC brightness/contrast + warm
-   translucent click-through overlay on one press; exact prior state restored on the next press,
-   crash-safe via a persist-before-write ledger. `low` · area:controls
+1. ~~**FaceLight**~~ — ✅ **Shipped (0.6.0, Issue #29).** Brightness boost + warm
+   translucent click-through overlay on one press; contrast stays unchanged. Prior brightness is
+   captured before activation and the persisted restore entry clears after verification. `low` · area:controls
 2. ~~**Clock Mode**~~ — ✅ **Shipped (0.6.0, Issue #30).** User-defined brightness schedules with
    time / sunrise / noon / sunset anchors, per-anchor offsets, and instant/ramp/continuous
    transitions, on public-domain NOAA solar math. Precedence: an explicit Clock Mode schedule

@@ -90,9 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         popover.behavior = .transient
         popover.animates = false
-        let controller = NSHostingController(rootView: MenuBarView().environmentObject(model))
-        controller.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = controller
+
 
         // Close the pop-out when an action that re-lays-out the displays is picked (e.g. Set as Main):
         // otherwise the open pop-out, anchored to the status item, gets displaced to a random spot when
@@ -132,6 +130,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            #if !PUBLIC_API_ONLY
+            Task { await model.refreshSystemColors() }
+            #endif
+            if popover.contentViewController == nil {
+                let controller = NSHostingController(rootView: MenuBarView().environmentObject(model))
+                controller.sizingOptions = [.preferredContentSize]
+                popover.contentViewController = controller
+            }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             guard let window = popover.contentViewController?.view.window else { return }
             window.makeKey()

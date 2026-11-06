@@ -127,15 +127,17 @@ public struct ODQuickAction: View {
     private let label: String
     private let tone: ODTone
     private let enabled: Bool
+    private let isOn: Bool?
     private let action: () -> Void
     @State private var hovering = false
 
     public init(_ label: String, systemImage: String, tone: ODTone = .neutral,
-                enabled: Bool = true, action: @escaping () -> Void) {
+                enabled: Bool = true, isOn: Bool? = nil, action: @escaping () -> Void) {
         self.label = label
         self.systemImage = systemImage
         self.tone = tone
         self.enabled = enabled
+        self.isOn = isOn
         self.action = action
     }
 
@@ -148,17 +150,20 @@ public struct ODQuickAction: View {
             .foregroundStyle(foreground)
             .frame(maxWidth: .infinity)
             .frame(height: 26)
-            .background(ODColor.fillTertiary.opacity(hovering && enabled ? 1.7 : 1),
+            .background(isOn == true ? ODColor.accent.opacity(0.18) : ODColor.fillTertiary.opacity(hovering && enabled ? 1.7 : 1),
                         in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityValue(isOn.map { $0 ? "On" : "Off" } ?? "")
+        .accessibilityAddTraits(isOn == true ? .isSelected : [])
         .onHover { hovering = $0 }
     }
 
     private var foreground: Color {
         guard enabled else { return Color.secondary.opacity(0.6) }
+        if isOn == true { return ODColor.accent }
         return tone == .red ? ODColor.danger : Color.primary
     }
 }

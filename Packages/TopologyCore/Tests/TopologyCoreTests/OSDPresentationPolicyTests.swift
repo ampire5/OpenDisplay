@@ -55,4 +55,15 @@ final class OSDPresentationPolicyTests: XCTestCase {
         XCTAssertTrue(policy.shouldHide(now: hideAt, hideAt: hideAt))
         XCTAssertTrue(policy.shouldHide(now: now.addingTimeInterval(2), hideAt: hideAt))
     }
+    func testModernStyleCanBeSavedAndRestored() throws {
+        let data = Data("\"modern\"".utf8)
+        XCTAssertNoThrow(try JSONDecoder().decode(OSDStyle.self, from: data))
+    }
+
+    func testMenuSlidersDoNotShowHUDWhileMediaKeysDo() {
+        XCTAssertFalse(OSDPresentationPolicy.showsHUD(for: .slider))
+        XCTAssertFalse(OSDPresentationPolicy.showsHUD(for: .observed))
+        XCTAssertTrue(OSDPresentationPolicy.showsHUD(for: .keys))
+    }
+
 }

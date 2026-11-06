@@ -151,6 +151,109 @@ final class AppPresetPolicyTests: XCTestCase {
         XCTAssertEqual(onTerminal.state.priorStateByDisplay[externalOne], Policy.PriorState(brightness: 0.9))
     }
 
+    // MARK: - Verified duplicate writes
+
+    func testSwitchingBetweenEqualPresetsSkipsVerifiedWritesAndKeepsRestoreDebt() {
+        let first = figmaPreset(brightness: 0.6, contrast: 0.4, colorPreset: 4)
+        let next = Policy.AppPreset(bundleIdentifier: "example.editor", applicationName: "Editor",
+                                    brightness: 0.6, contrast: 0.4, colorPreset: 4)
+        let activated = settle(frontmost: first.bundleIdentifier, presets: [first, next],
+            displays: [snapshot(externalOne, brightness: 0.9, contrast: 0.7, colorPreset: 1)], from: .init())
+        let observed = Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.6, contrast: 0.4,
+            colorPreset: 4, confirmedBrightness: 0.6, confirmedContrast: 0.4, confirmedColorPreset: 4)
+        let switched = settle(frontmost: next.bundleIdentifier, presets: [first, next],
+                               displays: [observed], from: activated.state)
+        XCTAssertTrue(switched.applyWrites.isEmpty)
+        XCTAssertEqual(switched.intentWrites,
+                       [Policy.DisplayWrite(recordID: externalOne, brightness: 0.6, contrast: 0.4, colorPreset: 4)])
+        XCTAssertTrue(switched.captures.isEmpty)
+        XCTAssertTrue(switched.appPresetIsActive)
+        XCTAssertEqual(switched.state.priorStateByDisplay[externalOne],
+                       Policy.PriorState(brightness: 0.9, contrast: 0.7, colorPreset: 1))
+        let leaving = settle(frontmost: nil, presets: [first, next], displays: [observed], from: switched.state)
+        XCTAssertEqual(leaving.restoreWrites,
+                       [Policy.DisplayWrite(recordID: externalOne, brightness: 0.9, contrast: 0.7, colorPreset: 1)])
+        XCTAssertEqual(leaving.clears, [externalOne])
+    }
+
+    func testEqualUnverifiedCachedValuesStillWriteEveryRequestedChannel() {
+        let preset = figmaPreset(brightness: 0.6, contrast: 0.4, colorPreset: 4)
+        let decision = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [snapshot(externalOne, brightness: 0.6, contrast: 0.4, colorPreset: 4)], from: .init())
+        XCTAssertEqual(decision.applyWrites,
+                       [Policy.DisplayWrite(recordID: externalOne, brightness: 0.6, contrast: 0.4, colorPreset: 4)])
+    }
+
+    func testOnlyVerifiedEqualChannelsAreSkipped() {
+        let preset = figmaPreset(brightness: 0.6, contrast: 0.4)
+        let decision = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.6, contrast: 0.4,
+                                               confirmedBrightness: 0.6)], from: .init())
+        XCTAssertEqual(decision.applyWrites, [Policy.DisplayWrite(recordID: externalOne, contrast: 0.4)])
+        XCTAssertEqual(decision.captures[externalOne], Policy.PriorState(brightness: 0.6, contrast: 0.4))
+    }
+
+    func testChangingOrUnverifiedColorModeKeepsDependentContinuousWrites() {
+        let preset = figmaPreset(brightness: 0.6, contrast: 0.4, colorPreset: 4)
+        for confirmedMode: Int? in [1, nil] {
+            let decision = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+                displays: [Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.6, contrast: 0.4,
+                    colorPreset: 4, confirmedBrightness: 0.6, confirmedContrast: 0.4,
+                    confirmedColorPreset: confirmedMode)], from: .init())
+            XCTAssertEqual(decision.applyWrites,
+                           [Policy.DisplayWrite(recordID: externalOne, brightness: 0.6, contrast: 0.4, colorPreset: 4)])
+        }
+    }
+
+    func testReleasingColorModeKeepsDependentBrightnessWriteDespiteMatchingObservation() {
+        let first = figmaPreset(brightness: 0.5, colorPreset: 8)
+        let next = Policy.AppPreset(bundleIdentifier: "example.editor", applicationName: "Editor", brightness: 0.5)
+        let activated = settle(frontmost: first.bundleIdentifier, presets: [first, next],
+            displays: [snapshot(externalOne, brightness: 0.9, colorPreset: 5)], from: .init())
+        let switched = settle(frontmost: next.bundleIdentifier, presets: [first, next],
+            displays: [Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.5, colorPreset: 8,
+                                               confirmedBrightness: 0.5, confirmedColorPreset: 8)],
+            from: activated.state)
+        XCTAssertEqual(switched.applyWrites, [Policy.DisplayWrite(recordID: externalOne, brightness: 0.5)])
+        XCTAssertEqual(switched.restoreWrites, [Policy.DisplayWrite(recordID: externalOne, colorPreset: 5)])
+        XCTAssertEqual(switched.intentWrites, [Policy.DisplayWrite(recordID: externalOne, brightness: 0.5)])
+        XCTAssertEqual(switched.state.priorStateByDisplay[externalOne], Policy.PriorState(brightness: 0.9))
+    }
+
+    func testUnchangedVerifiedColorModeAllowsSkippingContinuousWrites() {
+        let preset = figmaPreset(brightness: 0.6, contrast: 0.4, colorPreset: 4)
+        let decision = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.6, contrast: 0.7,
+                colorPreset: 4, confirmedBrightness: 0.6, confirmedContrast: 0.7,
+                confirmedColorPreset: 4)], from: .init())
+        XCTAssertEqual(decision.applyWrites, [Policy.DisplayWrite(recordID: externalOne, contrast: 0.4)])
+    }
+
+    func testSkippedActivationStillCapturesBaselineAndRestoresItOnExit() {
+        let preset = figmaPreset(brightness: 0.6)
+        let observed = Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.6, confirmedBrightness: 0.6)
+        let activated = settle(frontmost: preset.bundleIdentifier, presets: [preset], displays: [observed], from: .init())
+        XCTAssertTrue(activated.applyWrites.isEmpty)
+        XCTAssertEqual(activated.captures[externalOne], Policy.PriorState(brightness: 0.6))
+        let leaving = settle(frontmost: nil, presets: [preset], displays: [observed], from: activated.state)
+        XCTAssertEqual(leaving.restoreWrites, [Policy.DisplayWrite(recordID: externalOne, brightness: 0.6)])
+        XCTAssertEqual(leaving.clears, [externalOne])
+    }
+
+    func testSkippedIncomingChannelStillReleasesOtherChannelsAndUpdatesBaseline() {
+        let first = figmaPreset(brightness: 0.6, contrast: 0.4)
+        let next = Policy.AppPreset(bundleIdentifier: "example.editor", applicationName: "Editor", brightness: 0.6)
+        let activated = settle(frontmost: first.bundleIdentifier, presets: [first, next],
+            displays: [snapshot(externalOne, brightness: 0.9, contrast: 0.7)], from: .init())
+        let switched = settle(frontmost: next.bundleIdentifier, presets: [first, next],
+            displays: [Policy.DisplaySnapshot(recordID: externalOne, brightness: 0.6, contrast: 0.4,
+                                               confirmedBrightness: 0.6)], from: activated.state)
+        XCTAssertTrue(switched.applyWrites.isEmpty)
+        XCTAssertEqual(switched.restoreWrites, [Policy.DisplayWrite(recordID: externalOne, contrast: 0.7)])
+        XCTAssertEqual(switched.baselineUpdates[externalOne], Policy.PriorState(brightness: 0.9))
+        XCTAssertEqual(switched.state.priorStateByDisplay[externalOne], Policy.PriorState(brightness: 0.9))
+    }
+
     // MARK: - Targeting
 
     func testASpecificDisplayTargetGovernsOnlyThatDisplay() {
@@ -219,6 +322,37 @@ final class AppPresetPolicyTests: XCTestCase {
         XCTAssertTrue(decision.state.priorStateByDisplay.isEmpty)
     }
 
+    func testMissingChannelBaselineIsCapturedWhenAFreshObservationBecomesAvailable() {
+        let preset = Policy.AppPreset(bundleIdentifier: "example.editor", applicationName: "Editor", contrast: 0.4)
+        let activated = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [snapshot(externalOne)], from: .init())
+        let stillUnavailable = Policy.resolve(.init(frontmostBundleID: preset.bundleIdentifier,
+            now: epoch.addingTimeInterval(1), presets: [preset], displays: [snapshot(externalOne)]),
+            state: activated.state)
+        XCTAssertTrue(stillUnavailable.captures.isEmpty)
+        XCTAssertTrue(stillUnavailable.applyWrites.isEmpty)
+        let recovered = Policy.resolve(.init(frontmostBundleID: preset.bundleIdentifier,
+            now: epoch.addingTimeInterval(2), presets: [preset],
+            displays: [Policy.DisplaySnapshot(recordID: externalOne, contrast: 0.7, confirmedContrast: 0.7)]),
+            state: stillUnavailable.state)
+        XCTAssertEqual(recovered.captures[externalOne], Policy.PriorState(contrast: 0.7))
+        XCTAssertEqual(recovered.applyWrites, [Policy.DisplayWrite(recordID: externalOne, contrast: 0.4)])
+        XCTAssertEqual(recovered.intentWrites, [Policy.DisplayWrite(recordID: externalOne, contrast: 0.4)])
+        XCTAssertEqual(recovered.state.priorStateByDisplay[externalOne], Policy.PriorState(contrast: 0.7))
+    }
+
+    func testUnverifiedCachedChannelDoesNotRetryAMissingBaseline() {
+        let preset = Policy.AppPreset(bundleIdentifier: "example.editor", applicationName: "Editor", contrast: 0.4)
+        let activated = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [snapshot(externalOne)], from: .init())
+        let cached = Policy.resolve(.init(frontmostBundleID: preset.bundleIdentifier,
+            now: epoch.addingTimeInterval(1), presets: [preset],
+            displays: [snapshot(externalOne, contrast: 0.7)]), state: activated.state)
+        XCTAssertTrue(cached.captures.isEmpty)
+        XCTAssertTrue(cached.applyWrites.isEmpty)
+        XCTAssertNil(cached.state.priorStateByDisplay[externalOne]?.contrast)
+    }
+
     // MARK: - Crash safety
 
     func testTheBaselineIsCapturedBeforeTheApplyWriteSoACrashBetweenStillOwesARestore() {
@@ -249,4 +383,41 @@ final class AppPresetPolicyTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Policy.PriorState.self, from: encoded)
         XCTAssertEqual(decoded, prior)
     }
+    func testEditingActivePresetAppliesNewValueWithoutRecapturingBaseline() {
+        var preset = figmaPreset(brightness: 0.6)
+        let first = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [snapshot(externalOne, brightness: 0.9)], from: .init())
+        preset.brightness = 0.4
+        let edited = Policy.resolve(.init(frontmostBundleID: preset.bundleIdentifier,
+            now: epoch.addingTimeInterval(1), presets: [preset],
+            displays: [snapshot(externalOne, brightness: 0.6)]), state: first.state)
+        XCTAssertEqual(edited.applyWrites.first?.brightness, 0.4)
+        XCTAssertEqual(edited.state.priorStateByDisplay[externalOne]?.brightness, 0.9)
+    }
+
+    func testSwitchingToPresetWithNewChannelCapturesThatChannelsBaseline() {
+        let firstPreset = figmaPreset(brightness: 0.6)
+        let first = settle(frontmost: firstPreset.bundleIdentifier, presets: [firstPreset],
+            displays: [snapshot(externalOne, brightness: 0.9, contrast: 0.7)], from: .init())
+        let next = Policy.AppPreset(bundleIdentifier: "example.editor", applicationName: "Editor", contrast: 0.3)
+        let switched = settle(frontmost: next.bundleIdentifier, presets: [firstPreset, next],
+            displays: [snapshot(externalOne, brightness: 0.6, contrast: 0.7)], from: first.state)
+        XCTAssertEqual(switched.captures[externalOne]?.contrast, 0.7)
+        XCTAssertEqual(switched.restoreWrites.first?.brightness, 0.9)
+        XCTAssertNil(switched.state.priorStateByDisplay[externalOne]?.brightness)
+    }
+
+    func testRemovingAChannelFromActivePresetRestoresOnlyThatChannel() {
+        var preset = figmaPreset(brightness: 0.6, contrast: 0.3)
+        let first = settle(frontmost: preset.bundleIdentifier, presets: [preset],
+            displays: [snapshot(externalOne, brightness: 0.9, contrast: 0.7)], from: .init())
+        preset.brightness = nil
+        let edited = Policy.resolve(.init(frontmostBundleID: preset.bundleIdentifier,
+            now: epoch.addingTimeInterval(1), presets: [preset],
+            displays: [snapshot(externalOne, brightness: 0.6, contrast: 0.3)]), state: first.state)
+        XCTAssertEqual(edited.restoreWrites.first?.brightness, 0.9)
+        XCTAssertNil(edited.state.priorStateByDisplay[externalOne]?.brightness)
+        XCTAssertEqual(edited.state.priorStateByDisplay[externalOne]?.contrast, 0.7)
+    }
+
 }

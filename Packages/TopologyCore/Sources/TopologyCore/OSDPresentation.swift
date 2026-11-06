@@ -3,8 +3,10 @@ import Foundation
 
 /// Visual style for the OSD HUD (Batch-3 #5 exposes this; the renderer reads it).
 public enum OSDStyle: String, Hashable, Sendable, Codable, CaseIterable {
-    /// macOS-like segmented HUD (default).
+    /// System-owned macOS HUD (default; requires the optional private-API provider).
     case native
+    /// App-owned compact glass HUD; explicitly separate from the system OSD.
+    case modern
     /// Compact pill with glyph + bar.
     case minimal
     /// Pre-Tahoe classic HUD look.
@@ -25,6 +27,11 @@ public enum OSDPosition: String, Hashable, Sendable, Codable, CaseIterable {
 /// pushes the auto-hide deadline forward, so a key-repeat or a slider drag is one continuously-visible
 /// HUD rather than a flicker stack.
 public struct OSDPresentationPolicy: Sendable {
+    /// A slider already supplies visible feedback. Only keyboard changes need another HUD.
+    public static func showsHUD(for origin: GroupSyncPolicy.ManualWrite.Origin) -> Bool {
+        origin == .keys
+    }
+
     /// Seconds the HUD stays up after the last change.
     public var autoHide: TimeInterval
     /// When true, an event identical to what's already shown is ignored rather than re-shown.
