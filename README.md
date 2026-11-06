@@ -178,6 +178,16 @@ its display target. Their original values are recorded before changing them and 
 the preset stops applying; unsupported controls are disabled. The global switches are also in
 the menu bar's More menu.
 
+The menu's gear reopens the last settings section. **Displays & arrangement…** opens Arrange;
+each display's resolution and colour links select that display and scroll to the matching controls,
+even when the settings window is already open.
+
+App-preset brightness uses a shared **Brightness transition** duration (0–5 seconds, default 1).
+Transitions start alongside Night Shift and True Tone; the latter retain macOS's own animation.
+Brightness uses a smoothstep curve, skips duplicate hardware values, and limits writes to at most
+ten per second without a catch-up burst on a busy bus. A new app or manual adjustment interrupts
+the old transition. Manual keys and sliders remain immediate; shutdown recovery remains immediate.
+
 **Modern (app HUD)** is OpenDisplay's compact glass indicator, not the system indicator.
 The full build optionally calibrates the native glass renderer to preserve backdrop detail;
 if its private material parameters are unavailable, the standard system glass remains in use.

@@ -107,6 +107,7 @@ public struct OpenDisplaySettings: Hashable, Sendable, Codable {
     /// App Presets (Issue #33): switch a display's brightness/contrast/colour preset when a chosen app
     /// becomes frontmost and restore the prior state when it leaves. Default off.
     public var appPresetSystemColorBaseline: SystemColorPresetPolicy.State = .init()
+    public var appPresetBrightnessTransitionSeconds: TimeInterval = 1
     public var appPresetsEnabled: Bool
     /// The configured per-app presets (at most one per bundle identifier).
     public var appPresets: [AppPresetPolicy.AppPreset]
@@ -276,6 +277,7 @@ public struct OpenDisplaySettings: Hashable, Sendable, Codable {
         case automaticUpdateDownloadEnabled
         case dimmingMethod
         case appPresetSystemColorBaseline
+        case appPresetBrightnessTransitionSeconds
         case appPresetsEnabled
         case appPresets
         case appPresetPriorStateByDisplay
@@ -365,6 +367,8 @@ public struct OpenDisplaySettings: Hashable, Sendable, Codable {
             ?? defaults.dimmingMethod
         appPresetSystemColorBaseline = container.lenient(SystemColorPresetPolicy.State.self,
             forKey: .appPresetSystemColorBaseline) ?? .init()
+        appPresetBrightnessTransitionSeconds = BrightnessTransition.duration(
+            container.lenient(Double.self, forKey: .appPresetBrightnessTransitionSeconds) ?? 1)
         appPresetsEnabled = container.lenient(Bool.self, forKey: .appPresetsEnabled)
             ?? defaults.appPresetsEnabled
         appPresets = container.lenient([AppPresetPolicy.AppPreset].self, forKey: .appPresets)

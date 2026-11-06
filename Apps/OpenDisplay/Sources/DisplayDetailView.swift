@@ -14,48 +14,57 @@ struct DisplayDetailView: View {
     let display: DisplayObservation
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let pending = model.pendingRevert {
-                    // Timed auto-revert prompt for a change made here in Settings (Issue 6).
-                    VStack(alignment: .leading, spacing: 6) {
-                        ODInlineBanner(tone: .orange, systemImage: "clock.arrow.circlepath",
-                                       title: "Keep these display settings?",
-                                       message: "\(pending.message). Reverting in \(pending.secondsRemaining)s…")
-                        HStack(spacing: 8) {
-                            Button("Keep") { model.confirmArrangementChange() }
-                                .keyboardShortcut(.defaultAction)
-                            Button("Revert now") { Task { await model.revertArrangementChange() } }
-                            Spacer()
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let pending = model.pendingRevert {
+                        // Timed auto-revert prompt for a change made here in Settings (Issue 6).
+                        VStack(alignment: .leading, spacing: 6) {
+                            ODInlineBanner(tone: .orange, systemImage: "clock.arrow.circlepath",
+                                           title: "Keep these display settings?",
+                                           message: "\(pending.message). Reverting in \(pending.secondsRemaining)s…")
+                            HStack(spacing: 8) {
+                                Button("Keep") { model.confirmArrangementChange() }
+                                    .keyboardShortcut(.defaultAction)
+                                Button("Revert now") { Task { await model.revertArrangementChange() } }
+                                Spacer()
+                            }
                         }
                     }
+                    ResolutionCard(display: display).id(SettingsNavigation.DisplayFocus.resolution)
+                    AppearanceCard(display: display).id(SettingsNavigation.DisplayFocus.colour)
+                    if display.displayClass != .builtIn { ControlsCard(display: display) }
+                    DimmingCard(display: display)
+                    UseAsCard(display: display)
+                    IdentityCard(display: display)
+                    InformationCard(display: display)
+                    // Display-agnostic, but the Displays tab is where it belongs (Issue #39) and this is
+                    // the tab's only scrolling surface.
+                    DisplayGroupsCard()
                 }
-                ResolutionCard(display: display)
-                AppearanceCard(display: display)
-                if display.displayClass != .builtIn { ControlsCard(display: display) }
-                DimmingCard(display: display)
-                UseAsCard(display: display)
-                IdentityCard(display: display)
-                InformationCard(display: display)
-                // Display-agnostic, but the Displays tab is where it belongs (Issue #39) and this is
-                // the tab's only scrolling surface.
-                DisplayGroupsCard()
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .task(id: display.recordID) {
-            // Opening the detail pane is a deliberate act — if this display currently has NO working
-            // hardware control, retry even negatively-cached DDC features so a monitor that just
-            // recovered (power-cycle, input switch) shows its controls now. Healthy displays keep
-            // their probe cache, so reopening the pane stays fast.
-            model.retryDDCDiscoveryIfDead(for: display)
-            await model.refreshBrightness(for: display)
-            await model.refreshColorProfile(for: display)
-            if display.displayClass != .builtIn {
-                await model.refreshHardwareControls(for: display)
-                await model.refreshColorPreset(for: display)
-                await model.refreshInputSource(for: display)
+            .task(id: model.settingsNavigation.revision) {
+                guard model.settingsNavigation.displayID == display.recordID.rawValue,
+                      let focus = model.settingsNavigation.displayFocus else { return }
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(focus, anchor: .top)
+            }
+            .task(id: display.recordID) {
+                // Opening the detail pane is a deliberate act — if this display currently has NO working
+                // hardware control, retry even negatively-cached DDC features so a monitor that just
+                // recovered (power-cycle, input switch) shows its controls now. Healthy displays keep
+                // their probe cache, so reopening the pane stays fast.
+                model.retryDDCDiscoveryIfDead(for: display)
+                await model.refreshBrightness(for: display)
+                await model.refreshColorProfile(for: display)
+                if display.displayClass != .builtIn {
+                    await model.refreshHardwareControls(for: display)
+                    await model.refreshColorPreset(for: display)
+                    await model.refreshInputSource(for: display)
+                }
             }
         }
     }

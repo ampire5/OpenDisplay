@@ -113,6 +113,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var brightnessMethod: [DisplayRecordID: BrightnessMethod] = [:]
     /// The display selected in the Settings → Displays detail pane. The menu bar sets this when it
     /// deep-links into Settings ("Display settings…"), so the right display is shown on arrival.
+    @Published var settingsNavigation = SettingsNavigation()
     @Published var selectedDisplayID: DisplayRecordID?
     /// Opt-in toggle for the experimental (private-API) rotation writer; persisted to UserDefaults.
     /// Drives the rotation backend live and stays false in the public-API-only build.
@@ -237,6 +238,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var systemColorError: String?
     private let systemColorControls = SystemColorControls()
     private var appPresetEvaluationTask: Task<Void, Never>?
+    private var appPresetBrightnessRamps: [DisplayRecordID: Task<Bool, Never>] = [:]
     private var appPresetEvaluationRevision: UInt64 = 0
     private var appPresetRequestClock = AppPresetRequestClock()
     private var appPresetReadConfirmations = DDCReadConfirmation<DDCControlKey>()
@@ -1156,6 +1158,7 @@ final class AppModel: ObservableObject {
     /// cycles. Writer tasks are cancelled before their controller is dropped so a draining task can't
     /// re-acquire and recreate a removed entry; controllers are lazily rebuilt on next use.
     private func pruneDDCCaches(to ids: Set<DisplayRecordID>) {
+        for id in appPresetBrightnessRamps.keys where !ids.contains(id) { cancelAppPresetBrightnessRamp(id) }
         for (id, task) in ddcWriters where !ids.contains(id) { task.cancel(); ddcWriters[id] = nil }
         for (id, task) in inputSourceWriter where !ids.contains(id) { task.cancel(); inputSourceWriter[id] = nil }
         for (id, task) in colorPresetWriter where !ids.contains(id) { task.cancel(); colorPresetWriter[id] = nil }
@@ -1357,6 +1360,7 @@ final class AppModel: ObservableObject {
         let id = observation.recordID
         guard !faceLightOwns(id) else { return }
         #if !PUBLIC_API_ONLY
+        cancelAppPresetBrightnessRamp(id)
         invalidateAppPresetReadings(for: id, vcp: 0x10)
         #endif
         brightness[id] = value
@@ -1725,6 +1729,7 @@ final class AppModel: ObservableObject {
     /// from re-caching a pre-wake binding when they land. Rebinding is cheap: one registry walk,
     /// off the main actor, on first use.
     private func invalidateDDCBindings() {
+        for id in Array(appPresetBrightnessRamps.keys) { cancelAppPresetBrightnessRamp(id) }
         for observation in displays where ddc[observation.recordID] != nil {
             logDisplayEvent("ddc-rebind:\(DDCBindingPolicy.Reason.wake.rawValue) \(displayName(for: observation))")
         }
@@ -1740,8 +1745,10 @@ final class AppModel: ObservableObject {
     /// write on a binding the policy still trusts (a busy panel) is not retried — the drain's
     /// read-back verification reports it like any other ignored write.
     private func drainWrite(vcp: UInt8, _ value: Int, via controller: inout ExternalDisplayDDC,
-                            retryAvailable: inout Bool, observation: DisplayObservation) async -> Bool {
+                            retryAvailable: inout Bool, observation: DisplayObservation,
+                            didInvalidate: () -> Void = {}) async -> Bool {
         invalidateAppPresetReadings(for: observation.recordID, vcp: vcp)
+        didInvalidate()
         if await controller.write(vcp: vcp, value) { return true }
         guard retryAvailable, let current = await ddcController(for: observation),
               current !== controller else { return false }
@@ -2734,6 +2741,11 @@ final class AppModel: ObservableObject {
 
     // MARK: - App Presets (Issue #33): per-app brightness / colour-preset switching
 
+    func setAppPresetBrightnessTransition(_ seconds: TimeInterval) {
+        settings.appPresetBrightnessTransitionSeconds = BrightnessTransition.duration(seconds)
+        persistSettings()
+    }
+
     func setAppPresetsEnabled(_ enabled: Bool) {
         guard settings.appPresetsEnabled != enabled else { return }
         settings.appPresetsEnabled = enabled
@@ -2856,10 +2868,6 @@ final class AppModel: ObservableObject {
                 await self.resolveAndApplyAppPresets(frontmostBundleID: bundleID, revision: revision)
                 guard !Task.isCancelled else { return }
                 guard self.appPresetRequestIsCurrent(revision, bundleID: bundleID) else { continue }
-                let preset = self.settings.appPresets.first { $0.bundleIdentifier == self.appPresetActivation.activeBundleID }
-                await self.reconcileSystemColorPreset(preset, isCurrent: { [weak self] in
-                    self?.appPresetRequestIsCurrent(revision, bundleID: bundleID) == true
-                })
                 if revision == self.appPresetEvaluationRevision { return }
             }
         }
@@ -2954,6 +2962,7 @@ final class AppModel: ObservableObject {
     }
 
     private func appPresetChannelHasPendingWrite(_ key: DDCControlKey) -> Bool {
+        if key.vcp == 0x10, appPresetBrightnessRamps[key.id] != nil { return true }
         if colorPresetWriter[key.id] != nil || colorPresetTarget[key.id] != nil { return true }
         if key.vcp == 0x10 { return ddcWriters[key.id] != nil || ddcTarget[key.id] != nil }
         return ddcControlWriter[key] != nil || ddcControlTarget[key] != nil
@@ -3035,7 +3044,8 @@ final class AppModel: ObservableObject {
             frontmostBundleID: frontmostBundleID, now: Date(), presets: settings.appPresets,
             displays: appPresetDisplaySnapshots())
         let decision = AppPresetPolicy.resolve(input, state: appPresetRequestClock.seed(appPresetActivation))
-        await applyAppPresetDecision(decision, isCurrent: { [weak self] in
+        let systemPreset = settings.appPresets.first { $0.bundleIdentifier == frontmostBundleID }
+        await applyAppPresetDecision(decision, systemPreset: systemPreset, isCurrent: { [weak self] in
             self?.appPresetRequestIsCurrent(revision, bundleID: frontmostBundleID) == true
         })
         if appPresetRequestIsCurrent(revision, bundleID: frontmostBundleID) {
@@ -3073,7 +3083,8 @@ final class AppModel: ObservableObject {
     /// BEFORE their apply writes, issue the apply then restore writes, then persist the clears AFTER
     /// their restore writes. Finally adopt the new activation state and governed-display set.
     private func applyAppPresetDecision(_ decision: AppPresetPolicy.Decision,
-                                         isCurrent: () -> Bool) async {
+                                         systemPreset: AppPresetPolicy.AppPreset?,
+                                         isCurrent: @escaping @MainActor () -> Bool) async {
         if !decision.captures.isEmpty {
             let previousLedger = settings.appPresetPriorStateByDisplay
             for (rawID, prior) in decision.captures where !faceLightOwns(DisplayRecordID(rawValue: rawID)) {
@@ -3128,6 +3139,17 @@ final class AppModel: ObservableObject {
             appPresetActivation.appliedPreset = nil
             return
         }
+        let systemTask = Task { [self] in
+            await reconcileSystemColorPreset(systemPreset, isCurrent: isCurrent)
+        }
+        defer { systemTask.cancel() }
+        var rampTasks: [(DisplayRecordID, Task<Bool, Never>)] = []
+        defer {
+            for (id, task) in rampTasks where appPresetBrightnessRamps[id] == task {
+                task.cancel()
+                appPresetBrightnessRamps[id] = nil
+            }
+        }
         for write in writes {
             let id = DisplayRecordID(rawValue: write.recordID)
             if let observation = displays.first(where: { $0.recordID == id }) {
@@ -3139,7 +3161,31 @@ final class AppModel: ObservableObject {
                 }
             }
             guard isCurrent() else { appPresetActivation.activeBundleID = nil; appPresetActivation.appliedPreset = nil; return }
-            applyAppPresetWrite(write, colourOnly: false)
+            var immediate = write
+            if let level = write.brightness, settings.appPresetBrightnessTransitionSeconds > 0,
+               settings.appPresetPriorStateByDisplay[write.recordID]?.brightness != nil,
+               let observation = displays.first(where: { $0.recordID == id }) {
+                immediate.brightness = nil
+                let duration = settings.appPresetBrightnessTransitionSeconds
+                let task = Task { [weak self] in
+                    await self?.transitionAppPresetBrightness(level, for: observation,
+                        duration: duration, isCurrent: isCurrent) ?? false
+                }
+                appPresetBrightnessRamps[id] = task
+                rampTasks.append((id, task))
+            }
+            applyAppPresetWrite(immediate, colourOnly: false)
+        }
+        var interruptedBrightness: Set<DisplayRecordID> = []
+        for (id, task) in rampTasks {
+            if !(await task.value) { interruptedBrightness.insert(id) }
+            if appPresetBrightnessRamps[id] == task { appPresetBrightnessRamps[id] = nil }
+        }
+        await systemTask.value
+        guard isCurrent() else {
+            appPresetActivation.activeBundleID = nil
+            appPresetActivation.appliedPreset = nil
+            return
         }
         // Wait for coalesced drains and readback before releasing any restore ledger entries.
         let touched = Set(writes.map(\.recordID))
@@ -3154,7 +3200,8 @@ final class AppModel: ObservableObject {
             guard !faceLightOwns(id) else { continue }
             let old = settings.appPresetPriorStateByDisplay[rawID]
             var retained = baseline
-            if baseline.brightness == nil, ddcWriteVerdicts[DDCControlKey(id: id, vcp: 0x10)] != .applied {
+            if baseline.brightness == nil,
+               interruptedBrightness.contains(id) || ddcWriteVerdicts[DDCControlKey(id: id, vcp: 0x10)] != .applied {
                 retained.brightness = old?.brightness
             }
             if baseline.contrast == nil, ddcWriteVerdicts[DDCControlKey(id: id, vcp: 0x12)] != .applied {
@@ -3167,7 +3214,7 @@ final class AppModel: ObservableObject {
         }
         for rawID in decision.clears {
             let id = DisplayRecordID(rawValue: rawID)
-            guard !faceLightOwns(id) else { continue }
+            guard !faceLightOwns(id), !interruptedBrightness.contains(id) else { continue }
             guard let prior = settings.appPresetPriorStateByDisplay[rawID] else { continue }
             if (prior.brightness == nil || ddcWriteVerdicts[DDCControlKey(id: id, vcp: 0x10)] == .applied)
                 && (prior.contrast == nil || ddcWriteVerdicts[DDCControlKey(id: id, vcp: 0x12)] == .applied)
@@ -3226,6 +3273,72 @@ final class AppModel: ObservableObject {
                 setHardwareControl(.contrast, value, for: observation, isGroupSync: true)
             } else { appPresetError = "The display’s contrast range could not be read after changing its colour mode." }
         }
+    }
+
+    private func cancelAppPresetBrightnessRamp(_ id: DisplayRecordID) {
+        appPresetBrightnessRamps.removeValue(forKey: id)?.cancel()
+    }
+
+    /// Uses the same DDC gate as ordinary controls, with one fresh start and one final readback.
+    /// Integer steps never create a backlog; manual writes revoke this task before taking over.
+    private func transitionAppPresetBrightness(_ level: Float, for observation: DisplayObservation,
+                                               duration: TimeInterval,
+                                               isCurrent: @escaping @MainActor () -> Bool) async -> Bool {
+        let id = observation.recordID
+        let key = DDCControlKey(id: id, vcp: 0x10)
+        let colourKey = DDCControlKey(id: id, vcp: 0x14)
+        let binding = ddcBindingGeneration
+        let colourVersion = appPresetReadConfirmations.generation(for: colourKey)
+        var version = appPresetReadConfirmations.generation(for: key)
+        @MainActor func current() -> Bool {
+            isCurrent() && !Task.isCancelled && !faceLightOwns(id)
+                && binding == ddcBindingGeneration
+                && version == appPresetReadConfirmations.generation(for: key)
+                && colourVersion == appPresetReadConfirmations.generation(for: colourKey)
+                && displays.contains { $0.recordID == id && $0.isActive }
+        }
+        guard current(), var controller = await ddcController(for: observation), current() else { return false }
+        let source: (current: Int, max: Int)?
+        if let confirmed = appPresetReadConfirmations.reading(for: key) {
+            source = (confirmed.current, confirmed.maximum)
+        } else { source = await controller.read(.brightness) }
+        guard current() else { return false }
+        guard let source, source.max > 0 else {
+            appPresetError = "The display did not report its brightness. The transition was skipped."
+            return false
+        }
+        brightnessMax[id] = source.max
+        appPresetRangeVersions[key] = colourVersion
+        let target = Int((level * Float(source.max)).rounded())
+        let steps = BrightnessTransition.steps(from: source.current, to: target,
+                                               seconds: duration, maximum: source.max)
+        ddcWriteVerdicts[key] = nil
+        if steps.isEmpty { ddcWriteVerdicts[key] = .applied; return true }
+        var retryAvailable = true
+        let completed = await BrightnessTransition.run(steps: steps, isCurrent: current,
+            now: { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000 },
+            wait: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+            write: { value in
+                let succeeded = await self.drainWrite(vcp: 0x10, value, via: &controller,
+                    retryAvailable: &retryAvailable, observation: observation,
+                    didInvalidate: { version = self.appPresetReadConfirmations.generation(for: key) })
+                guard current(), succeeded else { return false }
+                self.brightness[id] = Float(value) / Float(source.max)
+                return true
+            })
+        guard current() else { return false }
+        guard completed else {
+            appPresetError = "The display did not accept the brightness transition."
+            return false
+        }
+        do { try await Task.sleep(nanoseconds: Self.continuousSettleNanos) } catch { return false }
+        guard current() else { return false }
+        let reading = await controller.read(.brightness)
+        guard current() else { return false }
+        let outcome = DDCWriteVerification.outcome(target: target, readback: reading?.current, tolerance: 1)
+        noteWriteVerification(outcome, vcp: 0x10, id: id)
+        if outcome != .applied { appPresetError = "Could not verify the brightness change." }
+        return outcome == .applied
     }
 
     /// Arms the one-shot debounce re-check, replacing any prior timer. On fire it re-evaluates against
@@ -3521,6 +3634,10 @@ final class AppModel: ObservableObject {
     /// are held by `faceLightOwns` from the instant the transition is enqueued.
     private func drainFaceLightCompetingWrites(_ id: DisplayRecordID) async {
         #if !PUBLIC_API_ONLY
+        if let ramp = appPresetBrightnessRamps[id] {
+            cancelAppPresetBrightnessRamp(id)
+            _ = await ramp.value
+        }
         await nativeWriters[id]?.value
         await ddcWriters[id]?.value
         await colorPresetWriter[id]?.value
@@ -4656,6 +4773,7 @@ final class AppModel: ObservableObject {
         adaptiveLoop?.cancel()
         adaptiveLoop = nil
         appPresetShuttingDown = true
+        for id in Array(appPresetBrightnessRamps.keys) { cancelAppPresetBrightnessRamp(id) }
         stopAppPresetObserver()
         #endif
         await restoreOwedFaceLightState()

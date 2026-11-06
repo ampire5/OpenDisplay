@@ -86,11 +86,15 @@ struct MenuBarView: View {
                 Text(model.statusText).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Button { showSettings() } label: {
+            Button {
+                model.settingsNavigation.open(model.settingsNavigation.section)
+                showSettings()
+            } label: {
                 Image(systemName: "gearshape").font(.system(size: 15))
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
             .accessibilityLabel("Open Settings")
+            .help("Open Settings at the last section")
             Menu {
                 Toggle("Keep displays awake while external connected", isOn: Binding(
                     get: { model.settings.preventDisplaySleepWithExternal },
@@ -129,8 +133,9 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary).padding(8)
         } else {
             ForEach(model.displays, id: \.recordID) { display in
-                DisplayCard(display: display, expandedID: $expandedID) {
+                DisplayCard(display: display, expandedID: $expandedID) { focus in
                     model.selectedDisplayID = display.recordID
+                    model.settingsNavigation.openDisplay(display.recordID.rawValue, focus: focus)
                     showSettings()
                 }
             }
@@ -147,7 +152,10 @@ struct MenuBarView: View {
                           systemImage: "arrow.triangle.2.circlepath", showChevron: false,
                           enabled: !model.busy) { Task { await model.reconnectAll() } }
             MenuActionRow(title: "Displays & arrangement…", systemImage: "rectangle.3.group",
-                          showChevron: true) { showSettings() }
+                          showChevron: true) {
+                model.settingsNavigation.open(.arrange)
+                showSettings()
+            }
             updatesRow
         }
     }
@@ -178,7 +186,7 @@ private struct DisplayCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let display: DisplayObservation
     @Binding var expandedID: DisplayRecordID?
-    let onOpenSettings: () -> Void
+    let onOpenSettings: (SettingsNavigation.DisplayFocus) -> Void
     @State private var probedHardware = false
 
     private var isExpanded: Bool { expandedID == display.recordID }
@@ -191,8 +199,10 @@ private struct DisplayCard: View {
                 brightnessRow
                 if let volume = model.ddcControl(.volume, for: display) { volumeRow(volume) }
                 quickActions
-                MenuActionRow(title: "Resolution & colour…", systemImage: "slider.horizontal.3",
-                              showChevron: true) { onOpenSettings() }
+                MenuActionRow(title: "Resolution & refresh rate…", systemImage: "rectangle.expand.vertical",
+                              showChevron: true) { onOpenSettings(.resolution) }
+                MenuActionRow(title: "Colour & profile…", systemImage: "paintpalette",
+                              showChevron: true) { onOpenSettings(.colour) }
             }
         }
         .padding(isExpanded ? 8 : 4)

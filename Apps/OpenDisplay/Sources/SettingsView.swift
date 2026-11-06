@@ -14,16 +14,20 @@ import TopologyCore
 /// See `Docs/InterfaceRedesign.md`.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var section: SettingsSection? = .displays
+    private var section: Binding<SettingsSection?> {
+        Binding(get: { model.settingsNavigation.section }, set: { value in
+            if let value { model.settingsNavigation.open(value) }
+        })
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.allCases, selection: $section) { item in
+            List(SettingsSection.allCases, selection: section) { item in
                 Label(item.title, systemImage: item.icon).tag(item)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
         } detail: {
-            switch section ?? .displays {
+            switch model.settingsNavigation.section {
             case .displays: DisplaysSection()
             case .arrange: ArrangeSection()
             case .scenes: ScenesSection()
@@ -37,17 +41,13 @@ struct SettingsView: View {
             await model.refreshDiagnostics()
             await model.refreshActivity()
         }
-        // Deep-link from the menu bar's "Display settings…": jump to the Displays section so the
-        // selected display is shown even if Settings was already open on another section.
-        .onChange(of: model.selectedDisplayID) { _, newValue in
-            if newValue != nil { section = .displays }
-        }
+
     }
 }
 
-enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-    case displays, arrange, scenes, appPresets, health, about
-    var id: String { rawValue }
+typealias SettingsSection = SettingsNavigation.Section
+
+extension SettingsNavigation.Section {
     var title: String {
         switch self {
         case .displays: return "Displays"
@@ -1188,6 +1188,19 @@ private struct AppPresetsCard: View {
                 }
             }
             if model.settings.appPresetsEnabled {
+                ODCard {
+                    ODRow("Brightness transition") {
+                        Slider(value: Binding(
+                            get: { model.settings.appPresetBrightnessTransitionSeconds },
+                            set: { model.setAppPresetBrightnessTransition($0) }), in: 0...5, step: 0.1)
+                            .frame(width: 140)
+                        Text(model.settings.appPresetBrightnessTransitionSeconds == 0 ? "Instant"
+                             : String(format: "%.1f s", model.settings.appPresetBrightnessTransitionSeconds))
+                            .monospacedDigit().frame(width: 54, alignment: .trailing)
+                    }
+                    Text("Applies when switching apps and returning to the previous brightness. System colour effects start alongside brightness; manual controls stay immediate.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 AppPresetList()
             }
         }
