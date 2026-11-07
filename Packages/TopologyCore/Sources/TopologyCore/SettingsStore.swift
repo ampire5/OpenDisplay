@@ -30,6 +30,7 @@ public struct OpenDisplaySettings: Hashable, Sendable, Codable {
     /// enables it is never prompted.
     public var mediaKeyInterceptionEnabled: Bool
     /// Which display the media keys act on (Batch-3 #1/#3).
+    public var brightnessStepPercent: Int = 10
     public var mediaKeyTargetMode: MediaKeyTargetMode
     /// When on, show the on-screen-display HUD for brightness/volume changes (Batch-3 #4). Independent
     /// of media keys — the HUD also fires for menu/CLI/Intent-driven changes.
@@ -253,6 +254,7 @@ public struct OpenDisplaySettings: Hashable, Sendable, Codable {
         case hotkeyShortcuts
         case displayNotificationsEnabled
         case mediaKeyInterceptionEnabled
+        case brightnessStepPercent
         case mediaKeyTargetMode
         case osdEnabled
         case osdStyle
@@ -319,6 +321,8 @@ public struct OpenDisplaySettings: Hashable, Sendable, Codable {
             ?? defaults.displayNotificationsEnabled
         mediaKeyInterceptionEnabled = container.lenient(Bool.self, forKey: .mediaKeyInterceptionEnabled)
             ?? defaults.mediaKeyInterceptionEnabled
+        brightnessStepPercent = MediaKeyStep.brightnessPercent(
+            container.lenient(Int.self, forKey: .brightnessStepPercent) ?? 10)
         mediaKeyTargetMode = container.lenient(MediaKeyTargetMode.self, forKey: .mediaKeyTargetMode)
             ?? defaults.mediaKeyTargetMode
         osdEnabled = container.lenient(Bool.self, forKey: .osdEnabled)

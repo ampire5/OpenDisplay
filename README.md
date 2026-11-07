@@ -182,6 +182,9 @@ The menu's gear reopens the last settings section. **Displays & arrangement…**
 each display's resolution and colour links select that display and scroll to the matching controls,
 even when the settings window is already open.
 
+Brightness keys and brightness shortcuts share a configurable **Brightness step** (1–100%, default 10%)
+under Media keys. Shift+Option with a media key uses one quarter of that step; volume keeps its usual step.
+
 App-preset brightness uses a shared **Brightness transition** duration (0–5 seconds, default 1).
 Transitions start alongside Night Shift and True Tone; the latter retain macOS's own animation.
 Brightness uses a smoothstep curve, skips duplicate hardware values, and limits writes to at most

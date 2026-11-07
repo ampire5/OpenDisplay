@@ -4848,9 +4848,21 @@ final class AppModel: ObservableObject {
         case .cycleMainDisplay:
             return { [weak self] in Task { await self?.cycleMainDisplay() } }
         case .brightnessUp:
-            return { [weak self] in Task { await self?.adjustMainBrightness(by: 0.1) } }
+            return { [weak self] in
+                Task {
+                    guard let self else { return }
+                    await self.adjustMainBrightness(by: MediaKeyAction.brightnessUp.signedDelta(
+                        fineStep: false, brightnessStepPercent: self.settings.brightnessStepPercent))
+                }
+            }
         case .brightnessDown:
-            return { [weak self] in Task { await self?.adjustMainBrightness(by: -0.1) } }
+            return { [weak self] in
+                Task {
+                    guard let self else { return }
+                    await self.adjustMainBrightness(by: MediaKeyAction.brightnessDown.signedDelta(
+                        fineStep: false, brightnessStepPercent: self.settings.brightnessStepPercent))
+                }
+            }
         case .faceLight:
             return { [weak self] in
                 guard let self, let main = self.displays.first(where: \.isMain) else { return }
@@ -4956,8 +4968,8 @@ final class AppModel: ObservableObject {
         switch action {
         case .brightnessUp, .brightnessDown:
             let current = brightness[id] ?? 0.5
-            setBrightness(min(1, max(0, current + action.signedDelta(fineStep: fineStep))), for: target,
-                          origin: .keys)
+            setBrightness(min(1, max(0, current + action.signedDelta(fineStep: fineStep,
+                brightnessStepPercent: settings.brightnessStepPercent))), for: target, origin: .keys)
         case .volumeUp, .volumeDown:
             let current = ddcControl(.volume, for: target) ?? 0.5
             setHardwareControl(.volume, min(1, max(0, current + action.signedDelta(fineStep: fineStep))),
@@ -5070,6 +5082,11 @@ final class AppModel: ObservableObject {
         settings.mediaKeyInterceptionEnabled = enabled
         persistSettings()
         reconcileMediaKeyTap()  // owns the Accessibility prompt + grant-poll when needed
+    }
+
+    func setBrightnessStepPercent(_ value: Int) {
+        settings.brightnessStepPercent = MediaKeyStep.brightnessPercent(value)
+        persistSettings()
     }
 
     func setMediaKeyTargetMode(_ mode: MediaKeyTargetMode) {

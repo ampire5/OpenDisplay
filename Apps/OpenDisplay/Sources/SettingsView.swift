@@ -556,6 +556,13 @@ private struct HealthSection: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                Stepper(value: Binding(
+                    get: { model.settings.brightnessStepPercent },
+                    set: { model.setBrightnessStepPercent($0) }), in: 1...100) {
+                    Text("Brightness step: \(model.settings.brightnessStepPercent)%")
+                }
+                Text("Applies to brightness keys and brightness shortcuts. Hold Shift+Option with a media key for a quarter step.")
+                    .font(.caption).foregroundStyle(.secondary)
                 if model.settings.mediaKeyInterceptionEnabled {
                     Picker("Brightness keys control the", selection: Binding(
                         get: { model.settings.mediaKeyTargetMode }, set: { model.setMediaKeyTargetMode($0) })) {
