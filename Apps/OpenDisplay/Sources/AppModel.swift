@@ -4923,7 +4923,8 @@ final class AppModel: ObservableObject {
         let content = OSDContent(kind: kind, value: value)
         if showHUD && settings.osdEnabled && settings.osdStyle != .external {
             osdHUD.present(content, cgDisplayID: observation.cgDisplayID,
-                           style: settings.osdStyle, position: settings.osdPosition)
+                           style: settings.osdStyle, position: settings.osdPosition,
+                           displayName: displayName(for: observation))
         }
         if settings.publishOSDEventsEnabled {
             OSDBroadcaster.publish(kind: kind, value: Double(value),
@@ -4940,7 +4941,8 @@ final class AppModel: ObservableObject {
         guard settings.osdEnabled, settings.osdStyle != .external else { return }
         let content = OSDContent(kind: .input, value: 0, label: inputName)
         osdHUD.present(content, cgDisplayID: observation.cgDisplayID,
-                       style: settings.osdStyle, position: settings.osdPosition)
+                       style: settings.osdStyle, position: settings.osdPosition,
+                       displayName: displayName(for: observation))
     }
 
     /// Handle a captured media key (Batch-3 #1/#3). Resolves the target display via the pure

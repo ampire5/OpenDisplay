@@ -30,8 +30,8 @@ final class MediaKeyTests: XCTestCase {
     }
 
     func testSignedDeltaCoarseAndFine() {
-        XCTAssertEqual(MediaKeyAction.brightnessUp.signedDelta(fineStep: false), 0.1, accuracy: 1e-6)
-        XCTAssertEqual(MediaKeyAction.brightnessUp.signedDelta(fineStep: true), 0.025, accuracy: 1e-6)
+        XCTAssertEqual(MediaKeyAction.brightnessUp.signedDelta(fineStep: false), 0.05, accuracy: 1e-6)
+        XCTAssertEqual(MediaKeyAction.brightnessUp.signedDelta(fineStep: true), 0.0125, accuracy: 1e-6)
         XCTAssertEqual(MediaKeyAction.volumeDown.signedDelta(fineStep: false), -1.0 / 16.0, accuracy: 1e-6)
         XCTAssertEqual(MediaKeyAction.muteToggle.signedDelta(fineStep: false), 0, accuracy: 1e-6)
     }
@@ -45,7 +45,7 @@ final class MediaKeyTests: XCTestCase {
 
     func testBrightnessStepSettingsDefaultAndRoundTrip() throws {
         let old = try JSONDecoder().decode(OpenDisplaySettings.self, from: Data("{}".utf8))
-        XCTAssertEqual(old.brightnessStepPercent, 10)
+        XCTAssertEqual(old.brightnessStepPercent, 5)
         var settings = OpenDisplaySettings()
         settings.brightnessStepPercent = 7
         let data = try JSONEncoder().encode(settings)

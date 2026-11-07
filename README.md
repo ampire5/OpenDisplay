@@ -187,7 +187,7 @@ The menu's gear reopens the last settings section. **Displays & arrangement…**
 each display's resolution and colour links select that display and scroll to the matching controls,
 even when the settings window is already open.
 
-Brightness keys and brightness shortcuts share a configurable **Brightness step** (1–100%, default 10%)
+Brightness keys and brightness shortcuts share a configurable **Brightness step** (1–100%, default 5%)
 under **Controls → Media keys**. Shift+Option with a media key uses one quarter of that step; volume keeps its usual step.
 
 App-preset brightness uses a shared **Brightness transition** duration (0–5 seconds, default 1).
@@ -197,6 +197,8 @@ ten per second without a catch-up burst on a busy bus. A new app or manual adjus
 the old transition. Manual keys and sliders remain immediate; shutdown recovery remains immediate.
 
 **Modern (app HUD)** is OpenDisplay's compact glass indicator, not the system indicator.
+It shows the target display name and whole-percent level; segments fill proportionally, including
+a partially filled final segment, so changes smaller than one segment remain visible.
 The full build optionally calibrates the native glass renderer to preserve backdrop detail;
 if its private material parameters are unavailable, the standard system glass remains in use.
 **System HUD (legacy)** asks macOS's OSD service to draw its older indicator. On macOS 26 and

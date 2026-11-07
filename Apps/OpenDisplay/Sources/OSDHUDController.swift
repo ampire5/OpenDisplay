@@ -103,7 +103,8 @@ final class OSDHUDController {
 
     /// Show (or refresh) the HUD for `content` on the screen matching `cgDisplayID` (falling back to the
     /// main screen). `external` style draws nothing — the event is broadcast for a notch app instead.
-    func present(_ content: OSDContent, cgDisplayID: CGDirectDisplayID?, style: OSDStyle, position: OSDPosition) {
+    func present(_ content: OSDContent, cgDisplayID: CGDirectDisplayID?, style: OSDStyle,
+                 position: OSDPosition, displayName: String? = nil) {
         if style == .native, content.kind != .input {
             #if !PUBLIC_API_ONLY
             systemOSD.present(content, displayID: cgDisplayID ?? CGMainDisplayID())
@@ -115,7 +116,7 @@ final class OSDHUDController {
         materialWorkItem?.cancel()
         presentationRevision &+= 1
         hosting.rootView = OSDHUDView(content: content, style: style,
-                                     displayName: screen(for: cgDisplayID)?.localizedName)
+                                     displayName: displayName ?? screen(for: cgDisplayID)?.localizedName)
         attachContent(for: style)
         panel.hasShadow = style != .modern
         let size = OSDHUDView.size(for: style)
@@ -267,26 +268,32 @@ struct OSDHUDView: View {
     private var modernBody: some View {
         HStack(spacing: 18.5) {
             Image(systemName: modernGlyph)
-                .font(.system(size: content.kind == .brightness ? 26 : 21, weight: .regular)).frame(width: 26)
-            if content.kind == .input {
-                Text(content.label ?? "").font(.system(size: 14, weight: .medium)).lineLimit(1)
+                .font(.system(size: content.kind == .brightness ? 26 : 21, weight: .regular))
+                .frame(width: 26)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(displayName ?? "Display")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                GeometryReader { proxy in
-                    HStack(spacing: 1) {
-                        ForEach(0..<OSDContent.segmentCount, id: \.self) { index in
-                            Rectangle().fill(.white.opacity(index < content.filledSegments ? 1 : 0.2))
-                                .frame(width: max(0, (proxy.size.width - 15) / 16))
-                        }
+                if content.kind == .input {
+                    Text(content.label ?? "").font(.system(size: 13, weight: .medium)).lineLimit(1)
+                } else {
+                    HStack(spacing: 6) {
+                        modernLevelBar.frame(height: 4)
+                        Text("\(content.percent)%")
+                            .font(.system(size: 12, weight: .bold)).monospacedDigit()
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            .frame(width: 36, alignment: .trailing)
                     }
-                    .clipShape(Capsule())
                 }
-                .frame(height: 4)
             }
+            .offset(y: -1.5)
         }
         .foregroundStyle(.white)
         .padding(.leading, 18)
-        .padding(.trailing, 31.5)
+        .padding(.trailing, 25)
         .frame(width: 308, height: 66)
         .background {
             if #unavailable(macOS 26) {
@@ -295,6 +302,27 @@ struct OSDHUDView: View {
             }
         }
         .environment(\.colorScheme, .dark)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var modernLevelBar: some View {
+        GeometryReader { proxy in
+            let gap: CGFloat = 1
+            let width = max(0, (proxy.size.width - gap * CGFloat(OSDContent.segmentCount - 1))
+                            / CGFloat(OSDContent.segmentCount))
+            HStack(spacing: gap) {
+                ForEach(0..<OSDContent.segmentCount, id: \.self) { index in
+                    Rectangle().fill(.white.opacity(0.2))
+                        .overlay(alignment: .leading) {
+                            Rectangle().fill(.white)
+                                .frame(width: width * CGFloat(content.segmentFill(at: index)))
+                        }
+                        .frame(width: width)
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .accessibilityHidden(true)
     }
 
     private var squareBody: some View {

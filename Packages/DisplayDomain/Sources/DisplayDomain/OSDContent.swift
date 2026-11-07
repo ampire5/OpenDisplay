@@ -34,6 +34,13 @@ public struct OSDContent: Hashable, Sendable {
         return max(0, min(Self.segmentCount, n))
     }
 
+    /// Fraction of one segment covered by the level, retaining sub-segment precision.
+    /// For example, 58% fills nine segments and 28% of the tenth.
+    public func segmentFill(at index: Int) -> Float {
+        guard (0..<Self.segmentCount).contains(index) else { return 0 }
+        return max(0, min(1, value * Float(Self.segmentCount) - Float(index)))
+    }
+
     /// Whole-percent level for an optional numeric readout.
     public var percent: Int { Int((value * 100).rounded()) }
 

@@ -36,4 +36,22 @@ final class OSDContentTests: XCTestCase {
         XCTAssertEqual(content.label, "HDMI 2")
         XCTAssertNil(OSDContent(kind: .brightness, value: 0.5).label)
     }
+    func testPartialSegmentFillTracksExactLevel() {
+        let content = OSDContent(kind: .brightness, value: 0.58)
+        XCTAssertEqual(content.segmentFill(at: 8), 1)
+        XCTAssertEqual(content.segmentFill(at: 9), 0.28, accuracy: 0.00001)
+        XCTAssertEqual(content.segmentFill(at: 10), 0)
+        XCTAssertEqual(OSDContent(kind: .brightness, value: 0.05).segmentFill(at: 0), 0.8, accuracy: 0.00001)
+    }
+
+    func testSegmentFillHandlesEndpointsAndInvalidIndices() {
+        for index in 0..<OSDContent.segmentCount {
+            XCTAssertEqual(OSDContent(kind: .brightness, value: 0).segmentFill(at: index), 0)
+            XCTAssertEqual(OSDContent(kind: .brightness, value: 1).segmentFill(at: index), 1)
+        }
+        let content = OSDContent(kind: .brightness, value: 0.5)
+        XCTAssertEqual(content.segmentFill(at: -1), 0)
+        XCTAssertEqual(content.segmentFill(at: 16), 0)
+    }
+
 }

@@ -48,7 +48,7 @@ public enum MediaKeyAction: String, Hashable, Sendable, CaseIterable {
 
     /// Brightness uses the configured percentage; volume retains the macOS 1/16 step.
     /// Holding Shift+Option reduces either step to one quarter. Mute returns zero.
-    public func signedDelta(fineStep: Bool, brightnessStepPercent: Int = 10) -> Float {
+    public func signedDelta(fineStep: Bool, brightnessStepPercent: Int = 5) -> Float {
         let step = isBrightness ? Float(MediaKeyStep.brightnessPercent(brightnessStepPercent)) / 100
             : MediaKeyStep.coarse
         return sign * step * (fineStep ? 0.25 : 1)

@@ -1,17 +1,23 @@
 import AppKit
+import SwiftUI
 import DisplayDomain
 import TopologyCore
 @main struct Checks {
     @MainActor static func main() {
         _ = NSApplication.shared
         let hud = OSDHUDController()
-        for value: Float in [0.5, 0.25, 0.75] {
+        for value: Float in [0.58, 0.05, 1, 0] {
             hud.present(OSDContent(kind: .brightness, value: value), cgDisplayID: CGMainDisplayID(),
-                        style: .modern, position: .topCenter)
+                        style: .modern, position: .topCenter, displayName: "External Display")
             RunLoop.current.run(until: Date().addingTimeInterval(0.3))
             guard let panel = NSApp.windows.first(where: { $0 is NSPanel && $0.isVisible }) else {
                 preconditionFailure("Modern app HUD must appear")
             }
+            func findHosting(_ view: NSView) -> NSHostingView<OSDHUDView>? {
+                (view as? NSHostingView<OSDHUDView>) ?? view.subviews.compactMap { findHosting($0) }.first
+            }
+            precondition(panel.contentView.flatMap({ findHosting($0) })?.rootView.displayName == "External Display",
+                         "The HUD must retain the selected display name")
             var materialLayer: CALayer?
             if #available(macOS 26, *) {
                 func findGlass(_ view: NSView) -> NSGlassEffectView? {
