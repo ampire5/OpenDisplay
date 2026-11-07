@@ -6,12 +6,8 @@ import OpenDisplayDesignSystem
 import SwiftUI
 import TopologyCore
 
-/// Settings window. A sidebar (Displays · Arrange · Scenes · Health & Recovery · About) replaces the
-/// old 3-tab shell: "Displays" is now a selection list feeding a per-display detail pane (so the
-/// topology isn't duplicated with the menu bar), "Arrange" is promoted out of Scenes into its own
-/// item, and diagnostics/recovery/Labs are unified under "Health & Recovery". "About" sits directly
-/// below Health & Recovery and mirrors the standalone About window (`AboutView`) as an inline card.
-/// See `Docs/InterfaceRedesign.md`.
+/// Settings grouped into display management, preferences, and support. Each page contains one
+/// purpose; diagnostics are refreshed only when the Health & Recovery page is opened.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     private var section: Binding<SettingsSection?> {
@@ -22,8 +18,10 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.allCases, selection: section) { item in
-                Label(item.title, systemImage: item.icon).tag(item)
+            List(selection: section) {
+                Section("Displays") { sidebarRows([.displays, .arrange, .scenes]) }
+                Section("Preferences") { sidebarRows([.general, .controls, .colour, .appPresets, .advanced]) }
+                Section("Support") { sidebarRows([.health, .about]) }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
         } detail: {
@@ -31,17 +29,22 @@ struct SettingsView: View {
             case .displays: DisplaysSection()
             case .arrange: ArrangeSection()
             case .scenes: ScenesSection()
+            case .general: GeneralSection()
+            case .controls: ControlsSection()
+            case .colour: ColourSection()
+            case .advanced: AdvancedSection()
             case .appPresets: AppPresetsSection()
             case .health: HealthSection()
             case .about: AboutSection()
             }
         }
         .frame(minWidth: 720, idealWidth: 720, minHeight: 480, idealHeight: 520)
-        .task {
-            await model.refreshDiagnostics()
-            await model.refreshActivity()
-        }
+    }
 
+    private func sidebarRows(_ sections: [SettingsSection]) -> some View {
+        ForEach(sections) { item in
+            Label(item.title, systemImage: item.icon).tag(item)
+        }
     }
 }
 
@@ -53,6 +56,10 @@ extension SettingsNavigation.Section {
         case .displays: return "Displays"
         case .arrange: return "Arrange"
         case .scenes: return "Scenes"
+        case .general: return "General"
+        case .controls: return "Controls"
+        case .colour: return "Brightness & colour"
+        case .advanced: return "Advanced"
         case .appPresets: return "App Presets"
         case .health: return "Health & Recovery"
         case .about: return "About"
@@ -63,6 +70,10 @@ extension SettingsNavigation.Section {
         case .displays: return "display"
         case .arrange: return "rectangle.3.group"
         case .scenes: return "square.stack.3d.up"
+        case .general: return "gearshape"
+        case .controls: return "keyboard"
+        case .colour: return "sun.max"
+        case .advanced: return "flask"
         case .appPresets: return "app.badge"
         case .health: return "stethoscope"
         case .about: return "info.circle"
@@ -70,19 +81,33 @@ extension SettingsNavigation.Section {
     }
 }
 
-private struct AppPresetsSection: View {
+private struct SettingsPage<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                #if !PUBLIC_API_ONLY
-                SystemColorControlsCard()
-                AppPresetsCard()
-                #else
-                Text("App presets and system colour controls require the full build.")
-                    .foregroundStyle(.secondary)
-                #endif
-            }
-            .padding(16)
+            VStack(alignment: .leading, spacing: ODSpacing.md) { content }
+                .padding(ODSpacing.lg)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .navigationTitle(title)
+    }
+}
+
+private struct AppPresetsSection: View {
+    var body: some View {
+        SettingsPage(title: "App Presets") {
+            #if !PUBLIC_API_ONLY
+            AppPresetsCard()
+            #else
+            Text("App presets require the full build.").foregroundStyle(.secondary)
+            #endif
         }
     }
 }
@@ -352,9 +377,200 @@ private struct DiagnosticsExportSection: View {
     }
 }
 
-// MARK: - Health & Recovery (diagnostics + recovery + Labs + activity)
+// MARK: - Settings grouped by purpose
 
-private struct HealthSection: View {
+private struct GeneralSection: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        SettingsPage(title: "General") {
+            Text("Application").font(.title3)
+            LaunchAtLoginToggle()
+            Toggle(isOn: Binding(
+                get: { model.settings.displayNotificationsEnabled },
+                set: { model.setDisplayNotificationsEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notify on display connect / disconnect")
+                    Text("Posts a system notification when an external display is connected or "
+                         + "disconnected, and when the built-in is auto-disconnected. Asks for notification "
+                         + "permission the first time you turn this on.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Divider()
+            Text("Display connections & sleep").font(.title3)
+            Toggle(isOn: Binding(
+                get: { model.settings.preventDisplaySleepWithExternal },
+                set: { model.setPreventDisplaySleepWithExternal($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep displays awake while an external is connected")
+                    Text("Holds a system \u{201C}prevent display sleep\u{201D} assertion whenever at least one "
+                         + "external display is present, so the screens don\u{2019}t idle-dim during a "
+                         + "presentation or always-on setup. Released automatically when the last external "
+                         + "is disconnected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Toggle(isOn: Binding(
+                get: { model.settings.autoDisconnectBuiltInOnExternal },
+                set: { model.setAutoDisconnectBuiltInOnExternal($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Turn the built-in display off when an external connects")
+                    Text("When an external display arrives, the built-in panel is turned off automatically "
+                         + "(through the same safety-checked path as a manual disconnect). It comes back on "
+                         + "its own when the last external is unplugged. A second external doesn\u{2019}t change "
+                         + "anything.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Divider()
+            Text("Updates").font(.title3)
+            Toggle(isOn: Binding(
+                get: { model.settings.updateCheckEnabled },
+                set: { model.setUpdateCheckEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Check for updates automatically")
+                    Text("Looks at the release feed about once a day and shows what it finds in the "
+                         + "menu. Nothing is downloaded until you say so, and the menu\u{2019}s "
+                         + "\u{201C}Check for Updates\u{2026}\u{201D} works either way.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Toggle(isOn: Binding(
+                get: { model.settings.automaticUpdateDownloadEnabled },
+                set: { model.setAutomaticUpdateDownloadEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Download and install updates automatically")
+                    Text("Installs a new release on its own and relaunches OpenDisplay into it. Every "
+                         + "download is checked against the project\u{2019}s signing key before it runs. "
+                         + "Needs the automatic check above.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(!model.settings.updateCheckEnabled)
+            .padding(.leading, ODSpacing.lg)
+        }
+    }
+}
+
+private struct ControlsSection: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        SettingsPage(title: "Controls") {
+            Text("Media keys").font(.title3)
+            Toggle(isOn: Binding(
+                get: { model.settings.mediaKeyInterceptionEnabled },
+                set: { model.setMediaKeyInterceptionEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Use the brightness & volume keys to control displays")
+                    Text("Routes the hardware brightness keys to the chosen display (external "
+                         + "brightness over DDC). Volume keys follow the current sound output device, "
+                         + "driving that monitor's volume over DDC only when the audio plays through "
+                         + "it. Needs macOS Accessibility permission to capture the keys; nothing is "
+                         + "requested until you turn this on.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Stepper(value: Binding(
+                get: { model.settings.brightnessStepPercent },
+                set: { model.setBrightnessStepPercent($0) }), in: 1...100) {
+                Text("Brightness step: \(model.settings.brightnessStepPercent)%")
+            }
+            Text("Applies to brightness keys and brightness shortcuts. Hold Shift+Option with a media key for a quarter step.")
+                .font(.caption).foregroundStyle(.secondary)
+            if model.settings.mediaKeyInterceptionEnabled {
+                Picker("Brightness keys control the", selection: Binding(
+                    get: { model.settings.mediaKeyTargetMode }, set: { model.setMediaKeyTargetMode($0) })) {
+                    Text("Display under the pointer").tag(MediaKeyTargetMode.underCursor)
+                    Text("Main display").tag(MediaKeyTargetMode.mainDisplay)
+                    Text("Built-in display").tag(MediaKeyTargetMode.builtInAlways)
+                }
+                .fixedSize()
+                Text("Volume keys follow the current sound output device.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !MediaKeyTap.isAccessibilityTrusted {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("Accessibility permission needed to capture the keys.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Open Accessibility Settings\u{2026}") { openAccessibilitySettings() }
+                            .controlSize(.small)
+                    }
+                } else {
+                    Text("Accessibility granted \u{2014} media keys are active.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+            InputHotkeySection()
+
+            Divider()
+            Text("On-screen display").font(.title3)
+            Toggle(isOn: Binding(
+                get: { model.settings.osdEnabled },
+                set: { model.setOSDEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show an on-screen display for brightness & volume")
+                    Text("Keyboard changes show a HUD on the selected display. Menu sliders do not show an additional HUD.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if model.settings.osdEnabled {
+                HStack {
+                    Picker("Style", selection: Binding(
+                        get: { model.settings.osdStyle }, set: { model.setOSDStyle($0) })) {
+                        Text("System HUD (legacy)").tag(OSDStyle.native)
+                        Text("Modern (app HUD)").tag(OSDStyle.modern)
+                        Text("Minimal").tag(OSDStyle.minimal)
+                        Text("Classic").tag(OSDStyle.classicTahoe)
+                        Text("External HUD only").tag(OSDStyle.external)
+                    }
+                    .fixedSize()
+                    Picker("Position", selection: Binding(
+                        get: { model.settings.osdPosition }, set: { model.setOSDPosition($0) })) {
+                        Text("Bottom").tag(OSDPosition.bottomCenter)
+                        Text("Top").tag(OSDPosition.topCenter)
+                        Text("Center").tag(OSDPosition.center)
+                    }
+                    .fixedSize()
+                    .disabled(model.settings.osdStyle == .modern || model.settings.osdStyle == .native)
+                }
+            }
+            if model.settings.osdStyle == .modern {
+                Text("Keyboard changes show the HUD at the selected display’s top-right. Menu sliders do not show another HUD.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if model.settings.osdStyle == .native {
+                Text(model.nativeOSDAvailable
+                     ? "Uses the system OSD service. On macOS 26 and later this shows the older HUD, not the modern Control Center indicator."
+                     : "System HUD is unavailable in this build. Choose Minimal or Classic for an app HUD.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Toggle(isOn: Binding(
+                get: { model.settings.publishOSDEventsEnabled },
+                set: { model.setPublishOSDEventsEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Broadcast display events for notch / external HUD apps")
+                    Text("Publishes each brightness/volume change over a distributed notification "
+                         + "(\u{201C}dev.opendisplay.osd\u{201D}) so a notch app can render it. Off by default.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct ColourSection: View {
     @EnvironmentObject private var model: AppModel
 
     /// A DatePicker binding over a minutes-since-midnight Int setting (the schedule fields store
@@ -373,391 +589,226 @@ private struct HealthSection: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: ODSpacing.md) {
-                Text("Providers").font(.title3)
-                ForEach(model.diagnostics) { row in
-                    HStack(spacing: ODSpacing.sm) {
-                        Image(systemName: row.status == "supported" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(row.status == "supported" ? ODColor.connected : ODColor.caution)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(row.provider)
-                            Text("\(row.status) · risk \(row.risk)\(row.reasons.isEmpty ? "" : " · \(row.reasons.joined(separator: ", "))")")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        if row.experimental { ODBadge("Labs", tone: .orange) }
-                        Spacer()
-                    }
-                }
-
-                Divider()
-
-                Text("Recovery").font(.title3)
-                LabeledContent("Persistence policy", value: model.settings.persistencePolicy.rawValue)
-                LabeledContent("Global hotkey",
-                               value: model.settings.reconnectAllHotkeyEnabled ? model.reconnectAllHotkey : "disabled")
-                LabeledContent("Checkpoints", value: model.checkpointLocation)
-                Button {
-                    Task { await model.reconnectAll() }
-                } label: {
-                    Label("Reconnect All", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .disabled(model.busy)
-
-                Divider()
-
-                DiagnosticsExportSection()
-
-                Divider()
-
-                InputHotkeySection()
-
-                Divider()
-
-                Text("Behavior").font(.title3)
-                LaunchAtLoginToggle()
-                Toggle(isOn: Binding(
-                    get: { model.settings.preventDisplaySleepWithExternal },
-                    set: { model.setPreventDisplaySleepWithExternal($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Keep displays awake while an external is connected")
-                        Text("Holds a system \u{201C}prevent display sleep\u{201D} assertion whenever at least one "
-                             + "external display is present, so the screens don\u{2019}t idle-dim during a "
-                             + "presentation or always-on setup. Released automatically when the last external "
-                             + "is disconnected.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle(isOn: Binding(
-                    get: { model.settings.autoDisconnectBuiltInOnExternal },
-                    set: { model.setAutoDisconnectBuiltInOnExternal($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Turn the built-in display off when an external connects")
-                        Text("When an external display arrives, the built-in panel is turned off automatically "
-                             + "(through the same safety-checked path as a manual disconnect). It comes back on "
-                             + "its own when the last external is unplugged. A second external doesn\u{2019}t change "
-                             + "anything.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle(isOn: Binding(
-                    get: { model.settings.displayNotificationsEnabled },
-                    set: { model.setDisplayNotificationsEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Notify on display connect / disconnect")
-                        Text("Posts a system notification when an external display is connected or "
-                             + "disconnected, and when the built-in is auto-disconnected. Asks for notification "
-                             + "permission the first time you turn this on.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle(isOn: Binding(
-                    get: { model.settings.updateCheckEnabled },
-                    set: { model.setUpdateCheckEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Check for updates automatically")
-                        Text("Looks at the release feed about once a day and shows what it finds in the "
-                             + "menu. Nothing is downloaded until you say so, and the menu\u{2019}s "
-                             + "\u{201C}Check for Updates\u{2026}\u{201D} works either way.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle(isOn: Binding(
-                    get: { model.settings.automaticUpdateDownloadEnabled },
-                    set: { model.setAutomaticUpdateDownloadEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Download and install updates automatically")
-                        Text("Installs a new release on its own and relaunches OpenDisplay into it. Every "
-                             + "download is checked against the project\u{2019}s signing key before it runs. "
-                             + "Needs the automatic check above.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .disabled(!model.settings.updateCheckEnabled)
-                .padding(.leading, ODSpacing.lg)
-
-                Divider()
-
-                Text("On-screen display").font(.title3)
-                Toggle(isOn: Binding(
-                    get: { model.settings.osdEnabled },
-                    set: { model.setOSDEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Show an on-screen display for brightness & volume")
-                        Text("A floating HUD, like the system\u{2019}s own, appears on the affected display when "
-                             + "brightness or volume changes \u{2014} including changes driven by the menu or the "
-                             + "media keys below.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if model.settings.osdEnabled {
-                    HStack {
-                        Picker("Style", selection: Binding(
-                            get: { model.settings.osdStyle }, set: { model.setOSDStyle($0) })) {
-                            Text("System HUD (legacy)").tag(OSDStyle.native)
-                            Text("Modern (app HUD)").tag(OSDStyle.modern)
-                            Text("Minimal").tag(OSDStyle.minimal)
-                            Text("Classic").tag(OSDStyle.classicTahoe)
-                            Text("External HUD only").tag(OSDStyle.external)
-                        }
-                        .fixedSize()
-                        Picker("Position", selection: Binding(
-                            get: { model.settings.osdPosition }, set: { model.setOSDPosition($0) })) {
-                            Text("Bottom").tag(OSDPosition.bottomCenter)
-                            Text("Top").tag(OSDPosition.topCenter)
-                            Text("Center").tag(OSDPosition.center)
-                        }
-                        .fixedSize()
-                        .disabled(model.settings.osdStyle == .modern || model.settings.osdStyle == .native)
-                    }
-                }
-                if model.settings.osdStyle == .modern {
-                    Text("Keyboard changes show the HUD at the selected display’s top-right. Menu sliders do not show another HUD.")
+        SettingsPage(title: "Brightness & colour") {
+            #if !PUBLIC_API_ONLY
+            SystemColorControlsCard()
+            Divider()
+            HStack(spacing: 8) {
+                Text("Adaptive display").font(.title3)
+                ODBadge("Labs", tone: .orange)
+            }
+            Toggle(isOn: Binding(
+                get: { model.settings.adaptiveBrightnessSyncEnabled },
+                set: { model.setAdaptiveBrightnessSyncEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Match external brightness to the built-in display")
+                    Text("The monitor\u{2019}s real backlight follows the built-in panel \u{2014} which macOS "
+                         + "already adjusts from the ambient light sensor \u{2014} over DDC. Moving a slider "
+                         + "teaches it your preferred offset and pauses it for a minute. With the lid "
+                         + "closed it follows the schedule below instead. Brightness changed with the "
+                         + "monitor\u{2019}s own buttons can\u{2019}t be seen and may be overridden. "
+                         + "Displays in a group are left out \u{2014} their group drives them instead.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if model.settings.osdStyle == .native {
-                    Text(model.nativeOSDAvailable
-                         ? "Uses the system OSD service. On macOS 26 and later this shows the older HUD, not the modern Control Center indicator."
-                         : "System HUD is unavailable in this build. Choose Minimal or Classic for an app HUD.")
+            }
+            Toggle(isOn: Binding(
+                get: { model.settings.adaptiveWarmthEnabled },
+                set: { model.setAdaptiveWarmthEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Warm the monitor\u{2019}s colours in the evening")
+                    Text("Switches the monitor\u{2019}s hardware colour preset in the evening and back "
+                         + "each morning \u{2014} reducing blue light at the panel level, on top of Night "
+                         + "Shift\u{2019}s software tint. Follows Night Shift\u{2019}s own on/off state when "
+                         + "readable (best effort); otherwise the schedule below decides.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle(isOn: Binding(
-                    get: { model.settings.publishOSDEventsEnabled },
-                    set: { model.setPublishOSDEventsEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Broadcast display events for notch / external HUD apps")
-                        Text("Publishes each brightness/volume change over a distributed notification "
-                             + "(\u{201C}dev.opendisplay.osd\u{201D}) so a notch app can render it. Off by default.")
-                            .font(.caption).foregroundStyle(.secondary)
+            }
+            if model.settings.adaptiveWarmthEnabled {
+                Picker("Evening preset", selection: Binding(
+                    get: { model.settings.adaptiveEveningPreset },
+                    set: { model.setAdaptiveEveningPreset($0) })) {
+                    ForEach([1, 2, 3, 4, 5], id: \.self) { code in
+                        Text(model.presetName(code)).tag(code)
                     }
                 }
-
-                Divider()
-
-                Text("Media keys").font(.title3)
-                Toggle(isOn: Binding(
-                    get: { model.settings.mediaKeyInterceptionEnabled },
-                    set: { model.setMediaKeyInterceptionEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Use the brightness & volume keys to control displays")
-                        Text("Routes the hardware brightness keys to the chosen display (external "
-                             + "brightness over DDC). Volume keys follow the current sound output device, "
-                             + "driving that monitor's volume over DDC only when the audio plays through "
-                             + "it. Needs macOS Accessibility permission to capture the keys; nothing is "
-                             + "requested until you turn this on.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Stepper(value: Binding(
-                    get: { model.settings.brightnessStepPercent },
-                    set: { model.setBrightnessStepPercent($0) }), in: 1...100) {
-                    Text("Brightness step: \(model.settings.brightnessStepPercent)%")
-                }
-                Text("Applies to brightness keys and brightness shortcuts. Hold Shift+Option with a media key for a quarter step.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if model.settings.mediaKeyInterceptionEnabled {
-                    Picker("Brightness keys control the", selection: Binding(
-                        get: { model.settings.mediaKeyTargetMode }, set: { model.setMediaKeyTargetMode($0) })) {
-                        Text("Display under the pointer").tag(MediaKeyTargetMode.underCursor)
-                        Text("Main display").tag(MediaKeyTargetMode.mainDisplay)
-                        Text("Built-in display").tag(MediaKeyTargetMode.builtInAlways)
-                    }
-                    .fixedSize()
-                    Text("Volume keys follow the current sound output device.")
+                .fixedSize()
+            }
+            Toggle(isOn: Binding(
+                get: { model.settings.adaptiveLocationModeEnabled },
+                set: { model.setAdaptiveLocationModeEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Follow the sun\u{2019}s position (Location Mode)")
+                    Text("Drives brightness from the sun\u{2019}s elevation at the location set "
+                         + "below \u{2014} dim near dawn/dusk, full once the sun is well up. A "
+                         + "better lid-closed fallback than the flat schedule; the built-in "
+                         + "mirror and ambient sensor still take priority when available, and "
+                         + "Clock Mode\u{2019}s explicit schedule always wins.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if !MediaKeyTap.isAccessibilityTrusted {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            Text("Accessibility permission needed to capture the keys.")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Button("Open Accessibility Settings\u{2026}") { openAccessibilitySettings() }
-                                .controlSize(.small)
-                        }
-                    } else {
-                        Text("Accessibility granted \u{2014} media keys are active.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
-
-                #if !PUBLIC_API_ONLY
-                Divider()
-
-                HStack(spacing: 8) {
-                    Text("Adaptive display").font(.title3)
-                    ODBadge("Labs", tone: .orange)
+            }
+            if model.settings.adaptiveLocationModeEnabled, !model.settings.clockScheduleEnabled {
+                ClockLocationRow()
+            }
+            if model.settings.adaptiveBrightnessSyncEnabled || model.settings.adaptiveWarmthEnabled {
+                HStack(spacing: 16) {
+                    DatePicker("Day starts", selection: minuteBinding(
+                        get: { model.settings.adaptiveDayStartMinute },
+                        set: { model.setAdaptiveSchedule(dayStartMinute: $0,
+                                                         nightStartMinute: model.settings.adaptiveNightStartMinute,
+                                                         transitionMinutes: model.settings.adaptiveTransitionMinutes) }),
+                               displayedComponents: .hourAndMinute)
+                    DatePicker("Evening starts", selection: minuteBinding(
+                        get: { model.settings.adaptiveNightStartMinute },
+                        set: { model.setAdaptiveSchedule(dayStartMinute: model.settings.adaptiveDayStartMinute,
+                                                         nightStartMinute: $0,
+                                                         transitionMinutes: model.settings.adaptiveTransitionMinutes) }),
+                               displayedComponents: .hourAndMinute)
+                    Stepper("Ramp: \(model.settings.adaptiveTransitionMinutes) min",
+                            value: Binding(
+                                get: { model.settings.adaptiveTransitionMinutes },
+                                set: { model.setAdaptiveSchedule(dayStartMinute: model.settings.adaptiveDayStartMinute,
+                                                                 nightStartMinute: model.settings.adaptiveNightStartMinute,
+                                                                 transitionMinutes: $0) }),
+                            in: 5...120, step: 5)
                 }
-                Toggle(isOn: Binding(
-                    get: { model.settings.adaptiveBrightnessSyncEnabled },
-                    set: { model.setAdaptiveBrightnessSyncEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Match external brightness to the built-in display")
-                        Text("The monitor\u{2019}s real backlight follows the built-in panel \u{2014} which macOS "
-                             + "already adjusts from the ambient light sensor \u{2014} over DDC. Moving a slider "
-                             + "teaches it your preferred offset and pauses it for a minute. With the lid "
-                             + "closed it follows the schedule below instead. Brightness changed with the "
-                             + "monitor\u{2019}s own buttons can\u{2019}t be seen and may be overridden. "
-                             + "Displays in a group are left out \u{2014} their group drives them instead.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle(isOn: Binding(
-                    get: { model.settings.adaptiveWarmthEnabled },
-                    set: { model.setAdaptiveWarmthEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Warm the monitor\u{2019}s colours in the evening")
-                        Text("Switches the monitor\u{2019}s hardware colour preset in the evening and back "
-                             + "each morning \u{2014} reducing blue light at the panel level, on top of Night "
-                             + "Shift\u{2019}s software tint. Follows Night Shift\u{2019}s own on/off state when "
-                             + "readable (best effort); otherwise the schedule below decides.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if model.settings.adaptiveWarmthEnabled {
-                    Picker("Evening preset", selection: Binding(
-                        get: { model.settings.adaptiveEveningPreset },
-                        set: { model.setAdaptiveEveningPreset($0) })) {
-                        ForEach([1, 2, 3, 4, 5], id: \.self) { code in
-                            Text(model.presetName(code)).tag(code)
-                        }
-                    }
-                    .fixedSize()
-                }
-                Toggle(isOn: Binding(
-                    get: { model.settings.adaptiveLocationModeEnabled },
-                    set: { model.setAdaptiveLocationModeEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Follow the sun\u{2019}s position (Location Mode)")
-                        Text("Drives brightness from the sun\u{2019}s elevation at the location set "
-                             + "below \u{2014} dim near dawn/dusk, full once the sun is well up. A "
-                             + "better lid-closed fallback than the flat schedule; the built-in "
-                             + "mirror and ambient sensor still take priority when available, and "
-                             + "Clock Mode\u{2019}s explicit schedule always wins.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if model.settings.adaptiveLocationModeEnabled, !model.settings.clockScheduleEnabled {
-                    ClockLocationRow()
-                }
-                if model.settings.adaptiveBrightnessSyncEnabled || model.settings.adaptiveWarmthEnabled {
+                .fixedSize()
+                if model.settings.adaptiveBrightnessSyncEnabled {
                     HStack(spacing: 16) {
-                        DatePicker("Day starts", selection: minuteBinding(
-                            get: { model.settings.adaptiveDayStartMinute },
-                            set: { model.setAdaptiveSchedule(dayStartMinute: $0,
-                                                             nightStartMinute: model.settings.adaptiveNightStartMinute,
-                                                             transitionMinutes: model.settings.adaptiveTransitionMinutes) }),
-                                   displayedComponents: .hourAndMinute)
-                        DatePicker("Evening starts", selection: minuteBinding(
-                            get: { model.settings.adaptiveNightStartMinute },
-                            set: { model.setAdaptiveSchedule(dayStartMinute: model.settings.adaptiveDayStartMinute,
-                                                             nightStartMinute: $0,
-                                                             transitionMinutes: model.settings.adaptiveTransitionMinutes) }),
-                                   displayedComponents: .hourAndMinute)
-                        Stepper("Ramp: \(model.settings.adaptiveTransitionMinutes) min",
+                        Stepper("Day brightness: \(Int((model.settings.adaptiveFallbackDayLevel * 100).rounded()))%",
                                 value: Binding(
-                                    get: { model.settings.adaptiveTransitionMinutes },
-                                    set: { model.setAdaptiveSchedule(dayStartMinute: model.settings.adaptiveDayStartMinute,
-                                                                     nightStartMinute: model.settings.adaptiveNightStartMinute,
-                                                                     transitionMinutes: $0) }),
-                                in: 5...120, step: 5)
+                                    get: { Double(model.settings.adaptiveFallbackDayLevel) },
+                                    set: { model.setAdaptiveFallbackLevels(day: Float($0),
+                                                                           night: model.settings.adaptiveFallbackNightLevel) }),
+                                in: 0.1...1, step: 0.05)
+                        Stepper("Night brightness: \(Int((model.settings.adaptiveFallbackNightLevel * 100).rounded()))%",
+                                value: Binding(
+                                    get: { Double(model.settings.adaptiveFallbackNightLevel) },
+                                    set: { model.setAdaptiveFallbackLevels(day: model.settings.adaptiveFallbackDayLevel,
+                                                                           night: Float($0)) }),
+                                in: 0.1...1, step: 0.05)
                     }
                     .fixedSize()
-                    if model.settings.adaptiveBrightnessSyncEnabled {
-                        HStack(spacing: 16) {
-                            Stepper("Day brightness: \(Int((model.settings.adaptiveFallbackDayLevel * 100).rounded()))%",
-                                    value: Binding(
-                                        get: { Double(model.settings.adaptiveFallbackDayLevel) },
-                                        set: { model.setAdaptiveFallbackLevels(day: Float($0),
-                                                                               night: model.settings.adaptiveFallbackNightLevel) }),
-                                    in: 0.1...1, step: 0.05)
-                            Stepper("Night brightness: \(Int((model.settings.adaptiveFallbackNightLevel * 100).rounded()))%",
-                                    value: Binding(
-                                        get: { Double(model.settings.adaptiveFallbackNightLevel) },
-                                        set: { model.setAdaptiveFallbackLevels(day: model.settings.adaptiveFallbackDayLevel,
-                                                                               night: Float($0)) }),
-                                    in: 0.1...1, step: 0.05)
-                        }
-                        .fixedSize()
-                    }
-                    Text("Brightness intelligence, best available first: built-in display active \u{2192} "
-                         + "mirror its light-sensor level · built-in off but lid open \u{2192} read the "
-                         + "ambient light sensor directly · lid closed \u{2192} this schedule (day/night "
-                         + "levels, ramped). Warmth uses the schedule whenever Night Shift isn\u{2019}t "
-                         + "readable.")
+                }
+                Text("Brightness intelligence, best available first: built-in display active \u{2192} "
+                     + "mirror its light-sensor level · built-in off but lid open \u{2192} read the "
+                     + "ambient light sensor directly · lid closed \u{2192} this schedule (day/night "
+                     + "levels, ramped). Warmth uses the schedule whenever Night Shift isn\u{2019}t "
+                     + "readable.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Divider()
+            ClockModeCard()
+            #else
+            Text("System colour controls and adaptive display require the full build. Per-display colour profiles are available under Displays.")
+                .foregroundStyle(.secondary)
+            #endif
+        }
+    }
+}
+
+private struct AdvancedSection: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        SettingsPage(title: "Advanced") {
+            Text("Experimental features").font(.title3)
+            #if !PUBLIC_API_ONLY
+            Toggle(isOn: $model.experimentalRotationEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Experimental display rotation")
+                    Text("Rotate displays via a private API. Off by default; runs through a safety-checked, "
+                         + "isolated helper with automatic rollback, and is excluded from App Store builds.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            #endif
+            // Public Metal/CG only, so unlike the rotation toggle above this stays in the
+            // public-API-only build too.
+            Toggle(isOn: Binding(
+                get: { model.settings.xdrBrightnessEnabled },
+                set: { model.setXDRBrightnessEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("XDR Brightness")
+                    Text("Unlock the built-in XDR panel\u{2019}s full brightness for SDR content. "
+                         + "Experimental: HDR content will look clipped while boosted, and sustained "
+                         + "max brightness increases panel temperature. Never persists past quit.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if model.settings.xdrBrightnessEnabled {
+                XDRPowerAutomationRows()
+            }
+        }
+    }
+}
 
-                Divider()
-                ClockModeCard()
+private struct HealthSection: View {
+    @EnvironmentObject private var model: AppModel
 
-                #endif
-
-                Divider()
-
-                Text("Labs").font(.title3)
-                #if !PUBLIC_API_ONLY
-                Toggle(isOn: $model.experimentalRotationEnabled) {
+    var body: some View {
+        SettingsPage(title: "Health & Recovery") {
+            Text("Providers").font(.title3)
+            ForEach(model.diagnostics) { row in
+                HStack(spacing: ODSpacing.sm) {
+                    Image(systemName: row.status == "supported" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(row.status == "supported" ? ODColor.connected : ODColor.caution)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Experimental display rotation")
-                        Text("Rotate displays via a private API. Off by default; runs through a safety-checked, "
-                             + "isolated helper with automatic rollback, and is excluded from App Store builds.")
+                        Text(row.provider)
+                        Text("\(row.status) · risk \(row.risk)\(row.reasons.isEmpty ? "" : " · \(row.reasons.joined(separator: ", "))")")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    if row.experimental { ODBadge("Labs", tone: .orange) }
+                    Spacer()
                 }
-                #endif
-                // Public Metal/CG only, so unlike the rotation toggle above this stays in the
-                // public-API-only build too.
-                Toggle(isOn: Binding(
-                    get: { model.settings.xdrBrightnessEnabled },
-                    set: { model.setXDRBrightnessEnabled($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("XDR Brightness")
-                        Text("Unlock the built-in XDR panel\u{2019}s full brightness for SDR content. "
-                             + "Experimental: HDR content will look clipped while boosted, and sustained "
-                             + "max brightness increases panel temperature. Never persists past quit.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if model.settings.xdrBrightnessEnabled {
-                    XDRPowerAutomationRows()
-                }
+            }
 
-                Divider()
+            Divider()
 
-                Text("Recent Activity").font(.title3)
-                if model.recentActivity.isEmpty {
-                    Text("No recorded activity yet.").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    ForEach(Array(model.recentActivity.enumerated()), id: \.offset) { _, entry in
-                        HStack(spacing: ODSpacing.sm) {
-                            Text(entry.command).font(.caption).bold()
-                            Text(entry.status).font(.caption).foregroundStyle(.secondary)
-                            if !entry.targets.isEmpty {
-                                Text(entry.targets.joined(separator: ", "))
-                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            Spacer()
-                            Text(entry.timestamp.formatted(date: .omitted, time: .shortened))
-                                .font(.caption2).foregroundStyle(.secondary)
+            Text("Recovery").font(.title3)
+            LabeledContent("Persistence policy", value: model.settings.persistencePolicy.rawValue)
+            LabeledContent("Global hotkey",
+                           value: model.settings.reconnectAllHotkeyEnabled ? model.reconnectAllHotkey : "disabled")
+            LabeledContent("Checkpoints", value: model.checkpointLocation)
+            Button {
+                Task { await model.reconnectAll() }
+            } label: {
+                Label("Reconnect All", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(model.busy)
+
+            Divider()
+
+            DiagnosticsExportSection()
+
+            Divider()
+            Text("Recent Activity").font(.title3)
+            if model.recentActivity.isEmpty {
+                Text("No recorded activity yet.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(model.recentActivity.enumerated()), id: \.offset) { _, entry in
+                    HStack(spacing: ODSpacing.sm) {
+                        Text(entry.command).font(.caption).bold()
+                        Text(entry.status).font(.caption).foregroundStyle(.secondary)
+                        if !entry.targets.isEmpty {
+                            Text(entry.targets.joined(separator: ", "))
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }
+                        Spacer()
+                        Text(entry.timestamp.formatted(date: .omitted, time: .shortened))
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding(ODSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .navigationTitle("Health & Recovery")
+        .task {
+            await model.refreshDiagnostics()
+            await model.refreshActivity()
+        }
     }
 }
 
@@ -1211,6 +1262,7 @@ private struct AppPresetsCard: View {
                 AppPresetList()
             }
         }
+        .task { await model.refreshSystemColors() }
     }
 }
 

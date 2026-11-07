@@ -175,15 +175,20 @@ Prefer to build it yourself? See [Building the macOS app](#building-the-macos-ap
 Settings has a dedicated **App Presets** section. A preset can leave Night Shift and True Tone
 unchanged, turn them on, or turn them off. These two controls are **system-wide**, independent of
 its display target. Their original values are recorded before changing them and restored when
-the preset stops applying; unsupported controls are disabled. The global switches are also in
-the menu bar's More menu.
+the preset stops applying; unsupported controls are disabled. The global switches are in **Brightness & colour** and the menu bar's System block.
+
+Settings are grouped by purpose: **General** for app and connection behaviour, **Controls** for
+keys, shortcuts and HUDs, **Brightness & colour** for system colour modes and adaptive schedules,
+and **Advanced** for experimental rotation and XDR. **Health & Recovery** contains provider status,
+recovery, diagnostic export and recent activity. Per-display controls, arrangement, scenes and app
+presets retain their own pages.
 
 The menu's gear reopens the last settings section. **Displays & arrangement…** opens Arrange;
 each display's resolution and colour links select that display and scroll to the matching controls,
 even when the settings window is already open.
 
 Brightness keys and brightness shortcuts share a configurable **Brightness step** (1–100%, default 10%)
-under Media keys. Shift+Option with a media key uses one quarter of that step; volume keeps its usual step.
+under **Controls → Media keys**. Shift+Option with a media key uses one quarter of that step; volume keeps its usual step.
 
 App-preset brightness uses a shared **Brightness transition** duration (0–5 seconds, default 1).
 Transitions start alongside Night Shift and True Tone; the latter retain macOS's own animation.

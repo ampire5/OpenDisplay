@@ -1,7 +1,7 @@
 /// Explicit menu destinations, independent of the last selected display or sidebar section.
 public struct SettingsNavigation: Equatable, Sendable {
     public enum Section: String, CaseIterable, Identifiable, Sendable {
-        case displays, arrange, scenes, appPresets, health, about
+        case displays, arrange, scenes, general, controls, colour, appPresets, advanced, health, about
         public var id: String { rawValue }
     }
     public enum DisplayFocus: String, Hashable, Sendable {
