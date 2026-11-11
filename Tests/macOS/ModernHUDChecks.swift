@@ -6,12 +6,32 @@ import TopologyCore
     @MainActor static func main() {
         _ = NSApplication.shared
         let hud = OSDHUDController()
+        var checkedStacking = false
         for value: Float in [0.58, 0.05, 1, 0] {
             hud.present(OSDContent(kind: .brightness, value: value), cgDisplayID: CGMainDisplayID(),
                         style: .modern, position: .topCenter, displayName: "External Display")
             RunLoop.current.run(until: Date().addingTimeInterval(0.3))
             guard let panel = NSApp.windows.first(where: { $0 is NSPanel && $0.isVisible }) else {
                 preconditionFailure("Modern app HUD must appear")
+            }
+            if !checkedStacking {
+                // Reproduce an already-visible overlay occupying the HUD's position.
+                let existing = NSPanel(contentRect: panel.frame, styleMask: [.borderless, .nonactivatingPanel],
+                                       backing: .buffered, defer: false)
+                existing.level = .statusBar
+                existing.orderFrontRegardless()
+                hud.present(OSDContent(kind: .brightness, value: value), cgDisplayID: CGMainDisplayID(),
+                            style: .modern, position: .topCenter, displayName: "External Display")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]
+                let orderedIDs = windows?.compactMap { $0[kCGWindowNumber as String] as? Int } ?? []
+                guard let hudIndex = orderedIDs.firstIndex(of: panel.windowNumber),
+                      let existingIndex = orderedIDs.firstIndex(of: existing.windowNumber) else {
+                    preconditionFailure("Both test panels must be visible in WindowServer")
+                }
+                precondition(hudIndex < existingIndex, "Modern HUD must appear above an existing overlay")
+                existing.orderOut(nil)
+                checkedStacking = true
             }
             func findHosting(_ view: NSView) -> NSHostingView<OSDHUDView>? {
                 (view as? NSHostingView<OSDHUDView>) ?? view.subviews.compactMap { findHosting($0) }.first

@@ -40,12 +40,14 @@ final class OSDHUDController {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: true)
-        panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.ignoresMouseEvents = true
         panel.isFloatingPanel = true
+        // AppKit resets the level when isFloatingPanel is set. Assign the overlay level last
+        // so a system HUD that is still fading cannot cover this panel.
+        panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.overlayWindow)))
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.contentView = hosting
