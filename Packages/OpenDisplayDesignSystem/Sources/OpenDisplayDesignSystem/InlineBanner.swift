@@ -2,8 +2,8 @@
 import SwiftUI
 
 /// An inline confirmation / recovery banner (`reference` `InlineBanner`) for potentially disruptive
-/// actions — resolution change, disconnect countdown, degraded providers. A colored left rail keys the
-/// tone; an optional countdown and trailing actions support "keep / revert" flows.
+/// actions — resolution change, disconnect countdown, degraded providers. The icon signals the tone,
+/// and an optional countdown and actions support "keep / revert" flows.
 public struct ODInlineBanner<Actions: View>: View {
     private let tone: ODTone
     private let systemImage: String?
@@ -28,9 +28,11 @@ public struct ODInlineBanner<Actions: View>: View {
 
     public var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            Rectangle().fill(rail).frame(width: 2.5).clipShape(Capsule())
             if let systemImage {
-                Image(systemName: systemImage).foregroundStyle(rail).padding(.top, 1)
+                Image(systemName: systemImage)
+                    .foregroundStyle(tone.color ?? ODColor.accent)
+                    .padding(.top, 1)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary)
@@ -46,14 +48,13 @@ public struct ODInlineBanner<Actions: View>: View {
             if let countdown {
                 Text("\(countdown)s").font(.system(size: 11, weight: .medium))
                     .monospacedDigit().foregroundStyle(.secondary)
+                    .accessibilityLabel("\(countdown) seconds before reverting")
             }
         }
         .padding(10)
         .background(ODColor.cardBackground, in: RoundedRectangle(cornerRadius: ODRadius.card))
         .overlay(RoundedRectangle(cornerRadius: ODRadius.card).strokeBorder(ODColor.separator, lineWidth: 0.5))
     }
-
-    private var rail: Color { tone.color ?? ODColor.accent }
 }
 
 public extension ODInlineBanner where Actions == EmptyView {

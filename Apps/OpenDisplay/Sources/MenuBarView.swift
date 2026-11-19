@@ -13,76 +13,74 @@ import TopologyCore
 struct MenuBarView: View {
     @EnvironmentObject private var model: AppModel
     @State private var expandedID: DisplayRecordID?
+    @State private var hasSelectedInitialDisplay = false
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ODSpacing.sm) {
             header
-            revertBanner
-            ODSectionLabel("Displays")
-            content
+            DisplayChangeConfirmation()
+            ScrollView {
+                menuContent
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        contentHeight = $0
+                    }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(contentHeight > 0 ? contentHeight : 420, 420))
+        }
+        .padding(ODSpacing.md)
+        .frame(width: 344)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: model.displays.filter(\.isActive).map(\.recordID), initial: true) { _, activeIDs in
+            if let expandedID, activeIDs.contains(expandedID) { return }
+            guard expandedID != nil || !hasSelectedInitialDisplay else { return }
+            expandedID = model.displays.first { $0.isMain && $0.isActive }?.recordID ?? activeIDs.first
+            hasSelectedInitialDisplay = expandedID != nil
+        }
+    }
+
+    private var menuContent: some View {
+        VStack(alignment: .leading, spacing: ODSpacing.xs) {
             if model.isDegraded {
                 ODInlineBanner(tone: .orange, systemImage: "exclamationmark.triangle.fill",
-                               title: "Some providers are unavailable",
-                               message: "Open Diagnostics in Settings to see which routes are degraded.")
-                    .padding(.horizontal, 2).padding(.top, 2)
+                               title: "Some display controls are unavailable",
+                               message: "See Health & Recovery for diagnostic details.") {
+                    Button("Open Health & Recovery") {
+                        model.settingsNavigation.open(.health)
+                        showSettings()
+                    }
+                    .controlSize(.small)
+                }
             }
             if let error = model.faceLightError {
                 ODInlineBanner(tone: .orange, systemImage: "exclamationmark.triangle.fill",
-                               title: "Face Light needs attention", message: error)
-                    .padding(.horizontal, 2).padding(.top, 2)
+                               title: "FaceLight needs attention", message: error)
             }
             #if !PUBLIC_API_ONLY
             if let error = model.appPresetError {
                 ODInlineBanner(tone: .orange, systemImage: "exclamationmark.triangle.fill",
                                title: "App preset needs attention", message: error)
-                    .padding(.horizontal, 2).padding(.top, 2)
             }
-            ODDivider().padding(.vertical, 4)
+            #endif
+            content
+            #if !PUBLIC_API_ONLY
+            ODDivider(inset: 0).padding(.vertical, ODSpacing.xs)
             ODSectionLabel("System")
             SystemColourActions()
             #endif
-            ODDivider().padding(.vertical, 4)
+            ODDivider(inset: 0).padding(.vertical, ODSpacing.xs)
             toolsSection
         }
-        .padding(8)
-        .frame(width: 320)
-        .task {
-            #if !PUBLIC_API_ONLY
-            await model.refreshSystemColors()
-            #endif
-        }
-        .onChange(of: model.displays.count, initial: true) { _, _ in
-            if expandedID == nil { expandedID = model.displays.first(where: { $0.isMain })?.recordID }
-        }
-    }
-
-    /// "Keep these settings?" countdown for an arrangement-altering change (Issue 6), shown right below
-    /// the icon inside this pop-out — which (via the AppKit status item) now opens on the screen the
-    /// user clicked. The change also auto-reverts on its own if nothing is clicked.
-    @ViewBuilder
-    private var revertBanner: some View {
-        if let pending = model.pendingRevert {
-            VStack(alignment: .leading, spacing: 6) {
-                ODInlineBanner(tone: .orange, systemImage: "clock.arrow.circlepath",
-                               title: "Keep these display settings?",
-                               message: "\(pending.message). Reverting in \(pending.secondsRemaining)s…")
-                HStack(spacing: 8) {
-                    Button("Keep") { model.confirmArrangementChange() }
-                        .keyboardShortcut(.defaultAction)
-                    Button("Revert now") { Task { await model.revertArrangementChange() } }
-                    Spacer()
-                }
-                .padding(.horizontal, 2)
-            }
-            .padding(.bottom, 4)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "display").font(.system(size: 18)).foregroundStyle(ODColor.accent)
+            ODGlyphTile("display", glyphSize: 15)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Displays").font(.system(size: 14, weight: .semibold))
+                Text("Displays").font(.headline).accessibilityAddTraits(.isHeader)
                 Text(model.statusText).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
@@ -90,7 +88,10 @@ struct MenuBarView: View {
                 model.settingsNavigation.open(model.settingsNavigation.section)
                 showSettings()
             } label: {
-                Image(systemName: "gearshape").font(.system(size: 15))
+                Image(systemName: "gearshape")
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
             .accessibilityLabel("Open Settings")
@@ -111,13 +112,16 @@ struct MenuBarView: View {
                 Divider()
                 Button("Quit OpenDisplay") { NSApp.terminate(nil) }
             } label: {
-                Image(systemName: "ellipsis.circle").font(.system(size: 15))
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.button).buttonStyle(.plain).foregroundStyle(.secondary)
             .menuIndicator(.hidden).fixedSize()
             .accessibilityLabel("More options")
         }
-        .padding(.horizontal, 6).padding(.top, 2).padding(.bottom, 2)
+        .padding(.horizontal, ODSpacing.xs)
     }
 
     @ViewBuilder
@@ -129,8 +133,9 @@ struct MenuBarView: View {
             }
             .padding(8).frame(maxWidth: .infinity, alignment: .leading)
         } else if model.displays.isEmpty && model.managedOffline.isEmpty {
-            Label("No displays detected", systemImage: "display.trianglebadge.exclamationmark")
-                .foregroundStyle(.secondary).padding(8)
+            ODInlineBanner(systemImage: "display.trianglebadge.exclamationmark",
+                           title: "No displays detected",
+                           message: "If you turned a display off in OpenDisplay, use Reconnect all below.")
         } else {
             ForEach(model.displays, id: \.recordID) { display in
                 DisplayCard(display: display, expandedID: $expandedID) { focus in
@@ -148,7 +153,7 @@ struct MenuBarView: View {
     private var toolsSection: some View {
         VStack(spacing: 2) {
             ODSectionLabel("Tools")
-            MenuActionRow(title: model.busy ? "Reconnecting…" : "Reconnect all",
+            MenuActionRow(title: "Reconnect all",
                           systemImage: "arrow.triangle.2.circlepath", showChevron: false,
                           enabled: !model.busy) { Task { await model.reconnectAll() } }
             MenuActionRow(title: "Displays & arrangement…", systemImage: "rectangle.3.group",
@@ -176,6 +181,24 @@ struct MenuBarView: View {
     /// responder chain from this `NSPopover` was unreliable and often appeared to do nothing.
     private func showSettings() {
         NotificationCenter.default.post(name: .openDisplayShowSettings, object: nil)
+    }
+}
+
+/// Keeps the timed recovery controls visible while displays or settings scroll.
+struct DisplayChangeConfirmation: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let pending = model.pendingRevert {
+            ODInlineBanner(tone: .orange, systemImage: "clock.arrow.circlepath",
+                           title: "Keep these display settings?",
+                           message: pending.message, countdown: pending.secondsRemaining) {
+                Button("Keep") { model.confirmArrangementChange() }
+                    .keyboardShortcut(.defaultAction)
+                Button("Revert now") { Task { await model.revertArrangementChange() } }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -231,7 +254,8 @@ private struct DisplayCard: View {
                             tone: display.isMain ? .accent : .neutral)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.displayName(for: display))
-                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary).lineLimit(2)
+                        .help(model.displayName(for: display))
                     Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 6)
@@ -246,11 +270,13 @@ private struct DisplayCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!display.isActive)
+        .accessibilityHint(display.isActive
+                           ? (isExpanded ? "Hides display controls" : "Shows display controls") : "")
     }
 
     private var subtitle: String {
         guard display.isActive else { return "Inactive" }
-        guard let mode = display.mode else { return "—" }
+        guard let mode = display.mode else { return "Display mode unavailable" }
         return "\(mode.pointWidth) × \(mode.pointHeight) · \(Int(mode.refreshHz.rounded())) Hz"
     }
 
@@ -258,7 +284,7 @@ private struct DisplayCard: View {
         if model.isBlackedOut(display) {
             ODBadge("Blacked Out", tone: .neutral)
         } else if display.isMain {
-            ODBadge("Main", tone: .accent, solid: true)
+            ODBadge("Main")
         } else if display.isMirrored {
             ODBadge("Mirrored")
         } else if display.isActive {
@@ -277,17 +303,30 @@ private struct DisplayCard: View {
                     systemImage: "sun.min", trailingSystemImage: "sun.max",
                     value: Binding(get: { Double(model.brightness[id] ?? 0.5) },
                                    set: { model.setBrightness(Float($0), for: display) }),
-                    valueText: "\(Int(((model.brightness[id] ?? 0.5) * 100).rounded()))%",
+                    valueText: model.brightness[id].map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
                     accessibilityLabel: "Brightness")
-                .disabled(faceLightNeedsRestore)
-                .help(faceLightNeedsRestore ? "Restore FaceLight before changing brightness" : "Brightness")
+                .disabled(faceLightNeedsRestore || model.brightness[id] == nil)
+                .help(faceLightNeedsRestore ? "Turn off FaceLight before changing brightness" : "Brightness")
                 if model.xdrCapable(display) { xdrBoostToggle }
             }
-            ForEach(brightnessCaptions, id: \.self) { caption in
-                Text(caption).font(.system(size: 9)).foregroundStyle(.tertiary)
-                    .padding(.leading, 32).padding(.bottom, 2)
+            if faceLightNeedsRestore {
+                brightnessCaption("Turn off FaceLight to adjust brightness.")
+            } else if model.brightness[id] == nil {
+                brightnessCaption("Reading brightness…")
+            } else {
+                ForEach(brightnessCaptions, id: \.self) { caption in
+                    brightnessCaption(caption)
+                }
             }
         }
+    }
+
+    private func brightnessCaption(_ caption: String) -> some View {
+        Text(caption)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 32)
+            .padding(.bottom, 2)
     }
 
     /// What is worth saying under the slider: how brightness reaches this panel ("Hardware · DDC"),
@@ -325,17 +364,17 @@ private struct DisplayCard: View {
 
     private var quickActions: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
-                ODQuickAction(display.isMain ? "Main Display" : "Set as Main", systemImage: "star",
-                              enabled: !model.busy && !display.isMain) {
-                    // Close the pop-out first so set-main relocating the menu bar can't displace it.
-                    NotificationCenter.default.post(name: .openDisplayDismissMenu, object: nil)
-                    Task { await model.setMain(for: display) }
-                }
-            ODQuickAction(model.isBlackedOut(display) ? "Restore" : "Black Out",
+            ODQuickAction(display.isMain ? "Main Display" : "Set as Main", systemImage: "star",
+                          enabled: !model.busy && !display.isMain) {
+                // Close before set-main moves the status item.
+                NotificationCenter.default.post(name: .openDisplayDismissMenu, object: nil)
+                Task { await model.setMain(for: display) }
+            }
+            ODQuickAction(model.isBlackedOut(display) ? "Show Display" : "Black Out",
                           systemImage: model.isBlackedOut(display) ? "sun.max.fill" : "moon.fill") {
                 model.toggleBlackOut(for: display)
             }
-            ODQuickAction(faceLightNeedsRestore ? "Restore" : "FaceLight",
+            ODQuickAction(faceLightNeedsRestore ? "Turn Off FaceLight" : "FaceLight",
                           systemImage: faceLightNeedsRestore ? "video.slash.fill" : "video.fill",
                           isOn: model.isFaceLightActive(display)) {
                 model.toggleFaceLight(for: display)
@@ -394,9 +433,10 @@ private struct OfflineDisplayCard: View {
                 .opacity(0.6)
             VStack(alignment: .leading, spacing: 1) {
                 Text(offline.name).font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary).lineLimit(1)
+                    .lineLimit(2)
+                    .help(offline.name)
                 if offline.reconnectFailedAt == nil {
-                    Text("Managed offline").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text("Turned off").font(.caption).foregroundStyle(.secondary)
                 } else {
                     // Issue #40: macOS accepted the reconnect and no display appeared. Say so, and
                     // keep the way out one click away — the usual controls can't fix this state.
@@ -435,7 +475,7 @@ private struct MenuActionRow: View {
     private var active: Bool { enabled && !soon }
 
     var body: some View {
-        Button { if active { action() } } label: {
+        Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: systemImage).font(.system(size: 14)).frame(width: 18)
                     .foregroundStyle(active ? .secondary : .tertiary)
@@ -456,6 +496,7 @@ private struct MenuActionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!active)
         .onHover { hovering = $0 }
     }
 }

@@ -39,7 +39,7 @@ public struct ODGlyphTile: View {
     }
 }
 
-/// An uppercase section header (`reference` `SectionLabel`): "DISPLAYS", "TOOLS", with an optional
+/// A section header with an optional
 /// trailing accessory (e.g. a count or a small button).
 public struct ODSectionLabel<Trailing: View>: View {
     private let title: String
@@ -52,10 +52,10 @@ public struct ODSectionLabel<Trailing: View>: View {
 
     public var body: some View {
         HStack(spacing: 4) {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.3)
-                .foregroundStyle(.tertiary)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
             trailing
         }
@@ -103,8 +103,9 @@ public struct ODCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             if let title {
                 Text(title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 6)
             }
@@ -152,15 +153,17 @@ public struct ODRow<Leading: View, Trailing: View>: View {
         let row = HStack(spacing: 9) {
             leading
             VStack(alignment: .leading, spacing: 1) {
-                Text(label).font(.system(size: 13)).foregroundStyle(.primary).lineLimit(1)
+                Text(label).font(.system(size: 13)).foregroundStyle(.primary)
                 if let secondary {
-                    Text(secondary).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(secondary).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 6)
             trailing
         }
         .padding(.horizontal, 11)
+        .padding(.vertical, ODSpacing.xs)
         .frame(minHeight: 38)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(background, in: RoundedRectangle(cornerRadius: ODRadius.card))

@@ -25,17 +25,22 @@ struct SettingsView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
         } detail: {
-            switch model.settingsNavigation.section {
-            case .displays: DisplaysSection()
-            case .arrange: ArrangeSection()
-            case .scenes: ScenesSection()
-            case .general: GeneralSection()
-            case .controls: ControlsSection()
-            case .colour: ColourSection()
-            case .advanced: AdvancedSection()
-            case .appPresets: AppPresetsSection()
-            case .health: HealthSection()
-            case .about: AboutSection()
+            VStack(spacing: 0) {
+                DisplayChangeConfirmation()
+                    .padding(.horizontal, ODSpacing.lg)
+                    .padding(.vertical, model.pendingRevert == nil ? 0 : ODSpacing.sm)
+                switch model.settingsNavigation.section {
+                case .displays: DisplaysSection()
+                case .arrange: ArrangeSection()
+                case .scenes: ScenesSection()
+                case .general: GeneralSection()
+                case .controls: ControlsSection()
+                case .colour: ColourSection()
+                case .advanced: AdvancedSection()
+                case .appPresets: AppPresetsSection()
+                case .health: HealthSection()
+                case .about: AboutSection()
+                }
             }
         }
         .frame(minWidth: 720, idealWidth: 720, minHeight: 480, idealHeight: 520)
@@ -93,8 +98,9 @@ private struct SettingsPage<Content: View>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ODSpacing.md) { content }
+                .frame(maxWidth: 680, alignment: .topLeading)
                 .padding(ODSpacing.lg)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .top)
         }
         .navigationTitle(title)
     }
@@ -125,27 +131,68 @@ private struct DisplaysSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.displays.isEmpty {
-                ContentUnavailableView("No displays detected", systemImage: "display.trianglebadge.exclamationmark")
+            if model.phase == .scanning {
+                ProgressView("Scanning displays…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let display = selected {
+                displayHeader(display)
+                Divider()
+                DisplayDetailView(display: display)
             } else {
-                if model.displays.count > 1 {
-                    Picker("", selection: Binding(
-                        get: { selected?.recordID ?? model.displays.first?.recordID },
-                        set: { model.selectedDisplayID = $0 })) {
-                        ForEach(model.displays, id: \.recordID) { display in
-                            Text(model.displayName(for: display)).tag(Optional(display.recordID))
-                        }
-                    }
-                    .pickerStyle(.segmented).labelsHidden()
-                    .padding(.horizontal, 16).padding(.top, 16)
-                }
-                if let display = selected {
-                    DisplayDetailView(display: display)
+                ContentUnavailableView {
+                    Label("No displays detected", systemImage: "display.trianglebadge.exclamationmark")
+                } description: {
+                    Text("Use Health & Recovery to reconnect a display or check diagnostics.")
+                } actions: {
+                    Button("Open Health & Recovery") { model.settingsNavigation.open(.health) }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("Displays")
+    }
+
+    private func displayHeader(_ display: DisplayObservation) -> some View {
+        HStack(spacing: ODSpacing.md) {
+            ODGlyphTile(display.displayClass == .builtIn ? "laptopcomputer" : "display")
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.displayName(for: display))
+                    .font(.headline)
+                    .lineLimit(2)
+                    .accessibilityAddTraits(.isHeader)
+                if let mode = display.mode {
+                    Text("\(mode.pointWidth) × \(mode.pointHeight) · \(Int(mode.refreshHz.rounded())) Hz")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            Spacer(minLength: ODSpacing.sm)
+            if model.displays.count > 1 {
+                Menu("Switch Display") {
+                    ForEach(model.displays, id: \.recordID) { option in
+                        let isSelected = option.recordID == display.recordID
+                        let name = model.displayName(for: option)
+                        Button {
+                            model.selectedDisplayID = option.recordID
+                        } label: {
+                            if isSelected {
+                                Label(name, systemImage: "checkmark")
+                            } else {
+                                Text(name)
+                            }
+                        }
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    }
+                }
+                .fixedSize()
+            }
+        }
+        .frame(maxWidth: 680)
+        .padding(.horizontal, ODSpacing.lg)
+        .padding(.vertical, ODSpacing.md)
+        .frame(maxWidth: .infinity)
     }
 }
 

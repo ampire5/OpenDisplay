@@ -173,7 +173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let hosting = NSHostingController(rootView: SettingsView().environmentObject(model))
             let created = NSWindow(contentViewController: hosting)
             created.title = "OpenDisplay Settings"
-            created.styleMask = [.titled, .closable, .miniaturizable]
+            created.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            created.contentMinSize = NSSize(width: 720, height: 480)
             created.isReleasedWhenClosed = false
             created.setContentSize(NSSize(width: 720, height: 520))
             settingsWindow = created

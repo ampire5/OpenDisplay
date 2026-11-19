@@ -17,20 +17,6 @@ struct DisplayDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if let pending = model.pendingRevert {
-                        // Timed auto-revert prompt for a change made here in Settings (Issue 6).
-                        VStack(alignment: .leading, spacing: 6) {
-                            ODInlineBanner(tone: .orange, systemImage: "clock.arrow.circlepath",
-                                           title: "Keep these display settings?",
-                                           message: "\(pending.message). Reverting in \(pending.secondsRemaining)s…")
-                            HStack(spacing: 8) {
-                                Button("Keep") { model.confirmArrangementChange() }
-                                    .keyboardShortcut(.defaultAction)
-                                Button("Revert now") { Task { await model.revertArrangementChange() } }
-                                Spacer()
-                            }
-                        }
-                    }
                     ResolutionCard(display: display).id(SettingsNavigation.DisplayFocus.resolution)
                     AppearanceCard(display: display).id(SettingsNavigation.DisplayFocus.colour)
                     if display.displayClass != .builtIn { ControlsCard(display: display) }
@@ -42,8 +28,9 @@ struct DisplayDetailView: View {
                     // the tab's only scrolling surface.
                     DisplayGroupsCard()
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(maxWidth: 680, alignment: .topLeading)
+                .padding(ODSpacing.lg)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
             .task(id: model.settingsNavigation.revision) {
                 guard model.settingsNavigation.displayID == display.recordID.rawValue,

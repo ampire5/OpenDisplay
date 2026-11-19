@@ -39,15 +39,18 @@ public struct ODSliderRow: View {
     public var body: some View {
         HStack(spacing: 9) {
             Image(systemName: systemImage).font(.system(size: 15)).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             slider
             if let trailingSystemImage {
-                Image(systemName: trailingSystemImage).font(.system(size: 15)).foregroundStyle(.tertiary)
+                Image(systemName: trailingSystemImage).font(.system(size: 15)).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             if let valueText {
                 Text(valueText)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .frame(width: 30, alignment: .trailing)
+                    .frame(width: 34, alignment: .trailing)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
@@ -142,14 +145,15 @@ public struct ODQuickAction: View {
     }
 
     public var body: some View {
-        Button { if enabled { action() } } label: {
+        Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: systemImage).font(.system(size: 13))
-                Text(label).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                Text(label).font(.system(size: 11, weight: .medium)).lineLimit(2)
             }
             .foregroundStyle(foreground)
             .frame(maxWidth: .infinity)
-            .frame(height: 26)
+            .padding(.horizontal, ODSpacing.xs)
+            .frame(minHeight: 28)
             .background(isOn == true ? ODColor.accent.opacity(0.18) : ODColor.fillTertiary.opacity(hovering && enabled ? 1.7 : 1),
                         in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
